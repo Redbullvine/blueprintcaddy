@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DXF Blueprint Generator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="panel controls">
+      <h1>DXF Blueprint Generator</h1>
+      <p class="sub">Drop in a DXF, enter real dimensions, and generate a clean printable blueprint.</p>
+
+      <label class="file-drop" id="dropZone">
+        <input type="file" id="dxfFile" accept=".dxf" />
+        <span id="fileLabel">Drop DXF here or click to browse</span>
+      </label>
+
+      <div class="form-grid">
+        <label>
+          Drawing Title
+          <input type="text" id="drawingTitle" value="Blueprint Drawing" />
+        </label>
+        <label>
+          Units
+          <select id="units">
+            <option value="in">inches</option>
+            <option value="ft">feet</option>
+            <option value="mm">mm</option>
+            <option value="cm">cm</option>
+          </select>
+        </label>
+        <label>
+          Real Width
+          <input type="number" id="realWidth" step="0.001" value="28" />
+        </label>
+        <label>
+          Real Height
+          <input type="number" id="realHeight" step="0.001" value="24" />
+        </label>
+        <label>
+          Client / Project
+          <input type="text" id="projectName" value="Field Concept" />
+        </label>
+        <label>
+          Drawing Number
+          <input type="text" id="drawingNumber" value="A-001" />
+        </label>
+        <label>
+          Revision
+          <input type="text" id="revision" value="0" />
+        </label>
+        <label>
+          Drawn By
+          <input type="text" id="drawnBy" value="ChatGPT" />
+        </label>
+      </div>
+
+      <label>
+        Notes
+        <textarea id="notes" rows="5">Approximate concept blueprint generated from imported DXF geometry and entered overall dimensions.</textarea>
+      </label>
+
+      <div class="button-row">
+        <button id="generateBtn">Generate Blueprint</button>
+        <button id="downloadSvgBtn" class="secondary">Download SVG</button>
+        <button id="printBtn" class="secondary">Print / Save PDF</button>
+      </div>
+
+      <div class="status" id="status">Load a DXF file to begin.</div>
+
+      <details class="help">
+        <summary>What this app supports</summary>
+        <ul>
+          <li>LINE</li>
+          <li>CIRCLE</li>
+          <li>ARC</li>
+          <li>LWPOLYLINE</li>
+          <li>POLYLINE / VERTEX</li>
+        </ul>
+        <p>Best results come from clean 2D DXF files.</p>
+      </details>
+    </aside>
+
+    <main class="panel preview-panel">
+      <div class="preview-toolbar">
+        <strong>Blueprint Preview</strong>
+        <span id="geometrySummary">No drawing loaded</span>
+      </div>
+      <div class="preview-wrap" id="previewWrap">
+        <div class="empty-state">Your blueprint preview will appear here.</div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
