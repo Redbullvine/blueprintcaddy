@@ -1,439 +1,440 @@
 const state = {
-  fileName: '',
+  fileName: "",
+  sourceText: "",
   entities: [],
   bounds: null,
-  sourceSvg: '',
-  blueprintSvg: ''
+  unsupported: [],
+  rawSvg: "",
+  blueprintSvg: ""
 };
 
-const els = {
-  dxfFile: document.getElementById('dxfFile'),
-  dropZone: document.getElementById('dropZone'),
-  fileLabel: document.getElementById('fileLabel'),
-  drawingTitle: document.getElementById('drawingTitle'),
-  units: document.getElementById('units'),
-  realWidth: document.getElementById('realWidth'),
-  realHeight: document.getElementById('realHeight'),
-  projectName: document.getElementById('projectName'),
-  drawingNumber: document.getElementById('drawingNumber'),
-  revision: document.getElementById('revision'),
-  drawnBy: document.getElementById('drawnBy'),
-  notes: document.getElementById('notes'),
-  generateBtn: document.getElementById('generateBtn'),
-  downloadSvgBtn: document.getElementById('downloadSvgBtn'),
-  printBtn: document.getElementById('printBtn'),
-  status: document.getElementById('status'),
-  previewWrap: document.getElementById('previewWrap'),
-  geometrySummary: document.getElementById('geometrySummary')
+const PAGE_PRESETS = {
+  letter: { widthIn: 11, heightIn: 8.5 },
+  tabloid: { widthIn: 17, heightIn: 11 }
 };
 
-function setStatus(message, isError = false) {
-  els.status.textContent = message;
-  els.status.style.color = isError ? '#fca5a5' : '#cbd5e1';
+const controls = {
+  dxfFile: document.getElementById("dxfFile"),
+  dropInput: document.getElementById("dxfDropInput"),
+  dropZone: document.getElementById("dropZone"),
+  dropLabel: document.getElementById("dropLabel"),
+  messageBanner: document.getElementById("messageBanner"),
+  unsupportedPanel: document.getElementById("unsupportedPanel"),
+  unsupportedList: document.getElementById("unsupportedList"),
+  drawingTitle: document.getElementById("drawingTitle"),
+  projectName: document.getElementById("projectName"),
+  actualWidth: document.getElementById("actualWidth"),
+  actualHeight: document.getElementById("actualHeight"),
+  units: document.getElementById("units"),
+  pagePreset: document.getElementById("pagePreset"),
+  orientation: document.getElementById("orientation"),
+  revision: document.getElementById("revision"),
+  notes: document.getElementById("notes"),
+  generateBtn: document.getElementById("generateBtn"),
+  exportBtn: document.getElementById("exportBtn"),
+  printBtn: document.getElementById("printBtn"),
+  resetBtn: document.getElementById("resetBtn"),
+  loadSampleBtn: document.getElementById("loadSampleBtn"),
+  rawPreview: document.getElementById("rawPreview"),
+  blueprintPreview: document.getElementById("blueprintPreview"),
+  fileMeta: document.getElementById("fileMeta")
+};
+
+function setMessage(text, isError) {
+  controls.messageBanner.textContent = text;
+  controls.messageBanner.classList.toggle("error", Boolean(isError));
+}
+
+function escapeXml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatNumber(value, digits = 2) {
+  return Number(value).toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function todayStamp() {
+  const now = new Date();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const yyyy = String(now.getFullYear());
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function toRadians(deg) {
+  return (deg * Math.PI) / 180;
+}
+
+function mapPageSize() {
+  const presetValue = controls.pagePreset.value;
+  const [sheet, presetOrientation] = presetValue.split("-");
+  const orientation = controls.orientation.value || presetOrientation || "landscape";
+  const base = PAGE_PRESETS[sheet] || PAGE_PRESETS.letter;
+
+  const widthIn = orientation === "portrait" ? Math.min(base.widthIn, base.heightIn) : Math.max(base.widthIn, base.heightIn);
+  const heightIn = orientation === "portrait" ? Math.max(base.widthIn, base.heightIn) : Math.min(base.widthIn, base.heightIn);
+
+  return {
+    widthIn,
+    heightIn,
+    name: `${sheet === "tabloid" ? "Tabloid" : "Letter"} ${orientation}`
+  };
+}
+
+function renderUnsupported(unsupported) {
+  if (!unsupported.length) {
+    controls.unsupportedPanel.hidden = true;
+    controls.unsupportedList.innerHTML = "";
+    return;
+  }
+
+  controls.unsupportedPanel.hidden = false;
+  controls.unsupportedList.innerHTML = unsupported
+    .map((item) => `<li>${escapeXml(item.type)} (${item.count})</li>`)
+    .join("");
+}
+
+function renderSourceSvg(entities, bounds) {
+  const width = 900;
+  const height = 640;
+  const margin = 40;
+  const drawWidth = width - margin * 2;
+  const drawHeight = height - margin * 2;
+
+  const sourceWidth = Math.max(0.0001, bounds.maxX - bounds.minX);
+  const sourceHeight = Math.max(0.0001, bounds.maxY - bounds.minY);
+  const scale = Math.min(drawWidth / sourceWidth, drawHeight / sourceHeight);
+  const offsetX = margin + (drawWidth - sourceWidth * scale) / 2;
+  const offsetY = margin + (drawHeight - sourceHeight * scale) / 2;
+
+  const tx = (x) => offsetX + (x - bounds.minX) * scale;
+  const ty = (y) => height - (offsetY + (y - bounds.minY) * scale);
+
+  const lines = entities.map((entity) => entityToSvg(entity, tx, ty, scale, "#0f2d4f", 1.4)).join("");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <rect width="100%" height="100%" fill="#ffffff" />
+    <rect x="${margin}" y="${margin}" width="${drawWidth}" height="${drawHeight}" fill="#fcfdff" stroke="#bdc9d8" stroke-width="1.2" />
+    ${lines}
+  </svg>`;
+}
+
+function entityToSvg(entity, tx, ty, scale, stroke, strokeWidth) {
+  if (entity.type === "LINE") {
+    return `<line x1="${tx(entity.x1)}" y1="${ty(entity.y1)}" x2="${tx(entity.x2)}" y2="${ty(entity.y2)}" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+  }
+
+  if (entity.type === "POLYLINE") {
+    const points = entity.points.map((point) => `${tx(point.x)},${ty(point.y)}`).join(" ");
+    let svg = `<polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+    if (entity.closed && entity.points.length > 2) {
+      const start = entity.points[0];
+      const end = entity.points[entity.points.length - 1];
+      svg += `<line x1="${tx(end.x)}" y1="${ty(end.y)}" x2="${tx(start.x)}" y2="${ty(start.y)}" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+    }
+    return svg;
+  }
+
+  if (entity.type === "CIRCLE") {
+    return `<circle cx="${tx(entity.cx)}" cy="${ty(entity.cy)}" r="${entity.r * scale}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+  }
+
+  if (entity.type === "ARC") {
+    const startX = tx(entity.cx + Math.cos(toRadians(entity.startAngle)) * entity.r);
+    const startY = ty(entity.cy + Math.sin(toRadians(entity.startAngle)) * entity.r);
+    const endX = tx(entity.cx + Math.cos(toRadians(entity.endAngle)) * entity.r);
+    const endY = ty(entity.cy + Math.sin(toRadians(entity.endAngle)) * entity.r);
+
+    let delta = entity.endAngle - entity.startAngle;
+    while (delta < 0) delta += 360;
+    const largeArc = delta > 180 ? 1 : 0;
+
+    return `<path d="M ${startX} ${startY} A ${entity.r * scale} ${entity.r * scale} 0 ${largeArc} 1 ${endX} ${endY}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+  }
+
+  return "";
+}
+
+function parseUpload(text, fileName) {
+  try {
+    const parsed = window.DxfParserLite.parseDXF(text);
+    if (!parsed.entities.length || !parsed.bounds) {
+      throw new Error("No supported geometry found. Supported: LINE, LWPOLYLINE, POLYLINE, CIRCLE, ARC.");
+    }
+
+    state.fileName = fileName;
+    state.sourceText = text;
+    state.entities = parsed.entities;
+    state.bounds = parsed.bounds;
+    state.unsupported = parsed.unsupported;
+    state.rawSvg = renderSourceSvg(parsed.entities, parsed.bounds);
+
+    controls.rawPreview.classList.remove("empty");
+    controls.rawPreview.innerHTML = state.rawSvg;
+
+    const rawWidth = parsed.bounds.maxX - parsed.bounds.minX;
+    const rawHeight = parsed.bounds.maxY - parsed.bounds.minY;
+    controls.fileMeta.textContent = `${fileName} | ${parsed.entities.length} supported entities | Source bounds ${formatNumber(rawWidth)} x ${formatNumber(rawHeight)}`;
+    controls.dropLabel.textContent = `Loaded: ${fileName}`;
+
+    renderUnsupported(parsed.unsupported);
+    setMessage("DXF loaded. Enter actual dimensions and click Generate Blueprint.", false);
+  } catch (error) {
+    console.error(error);
+    setMessage(`Invalid DXF: ${error.message}`, true);
+  }
 }
 
 function readFile(file) {
-  state.fileName = file.name;
-  els.fileLabel.textContent = file.name;
+  if (!file) {
+    setMessage("No file selected. Upload a DXF file to continue.", true);
+    return;
+  }
+
+  if (!/\.dxf$/i.test(file.name)) {
+    setMessage("Only .dxf files are supported for this MVP.", true);
+    return;
+  }
+
   const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const text = String(reader.result || '');
-      const parsed = parseDXF(text);
-      state.entities = parsed.entities;
-      state.bounds = parsed.bounds;
-      if (!state.entities.length || !state.bounds) {
-        throw new Error('No supported 2D geometry found in this DXF.');
-      }
-      const w = (state.bounds.maxX - state.bounds.minX) || 1;
-      const h = (state.bounds.maxY - state.bounds.minY) || 1;
-      els.geometrySummary.textContent = `${state.entities.length} entities • source size ${formatNum(w)} × ${formatNum(h)}`;
-      setStatus('DXF loaded. Click Generate Blueprint.');
-      generateBlueprint();
-    } catch (err) {
-      console.error(err);
-      setStatus(err.message || 'Failed to parse DXF.', true);
-    }
-  };
+  reader.onload = () => parseUpload(String(reader.result || ""), file.name);
+  reader.onerror = () => setMessage("Could not read file. Try another DXF.", true);
   reader.readAsText(file);
 }
 
-function formatNum(value) {
-  return Number(value).toFixed(2).replace(/\.00$/, '');
-}
-
-function groupPairs(text) {
-  const lines = text.replace(/\r/g, '').split('\n');
-  const pairs = [];
-  for (let i = 0; i < lines.length; i += 2) {
-    pairs.push({ code: (lines[i] || '').trim(), value: (lines[i + 1] || '').trim() });
-  }
-  return pairs;
-}
-
-function parseDXF(text) {
-  const pairs = groupPairs(text);
-  const entities = [];
-  let i = 0;
-
-  const pushEntity = (entity) => {
-    if (!entity) return;
-    entities.push(entity);
-  };
-
-  while (i < pairs.length) {
-    const p = pairs[i];
-    if (p.code === '0') {
-      const type = p.value.toUpperCase();
-      if (type === 'LINE') {
-        let x1, y1, x2, y2;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const v = parseFloat(pairs[i].value);
-          if (c === '10') x1 = v;
-          if (c === '20') y1 = v;
-          if (c === '11') x2 = v;
-          if (c === '21') y2 = v;
-          i++;
-        }
-        pushEntity((isFinite(x1) && isFinite(y1) && isFinite(x2) && isFinite(y2)) ? { type: 'LINE', x1, y1, x2, y2 } : null);
-        continue;
-      }
-      if (type === 'CIRCLE') {
-        let cx, cy, r;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const v = parseFloat(pairs[i].value);
-          if (c === '10') cx = v;
-          if (c === '20') cy = v;
-          if (c === '40') r = v;
-          i++;
-        }
-        pushEntity((isFinite(cx) && isFinite(cy) && isFinite(r)) ? { type: 'CIRCLE', cx, cy, r } : null);
-        continue;
-      }
-      if (type === 'ARC') {
-        let cx, cy, r, startAngle, endAngle;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const v = parseFloat(pairs[i].value);
-          if (c === '10') cx = v;
-          if (c === '20') cy = v;
-          if (c === '40') r = v;
-          if (c === '50') startAngle = v;
-          if (c === '51') endAngle = v;
-          i++;
-        }
-        pushEntity((isFinite(cx) && isFinite(cy) && isFinite(r) && isFinite(startAngle) && isFinite(endAngle))
-          ? { type: 'ARC', cx, cy, r, startAngle, endAngle }
-          : null);
-        continue;
-      }
-      if (type === 'LWPOLYLINE') {
-        let points = [];
-        let closed = false;
-        let pendingX = null;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const raw = pairs[i].value;
-          if (c === '10') pendingX = parseFloat(raw);
-          if (c === '20' && pendingX !== null) {
-            points.push({ x: pendingX, y: parseFloat(raw) });
-            pendingX = null;
-          }
-          if (c === '70') {
-            const flag = parseInt(raw, 10);
-            closed = (flag & 1) === 1;
-          }
-          i++;
-        }
-        if (points.length > 1) pushEntity({ type: 'POLYLINE', points, closed });
-        continue;
-      }
-      if (type === 'POLYLINE') {
-        let points = [];
-        let closed = false;
-        i++;
-        while (i < pairs.length) {
-          const current = pairs[i];
-          if (current.code === '0' && current.value.toUpperCase() === 'SEQEND') {
-            i++;
-            break;
-          }
-          if (current.code === '70') {
-            const flag = parseInt(current.value, 10);
-            closed = (flag & 1) === 1;
-          }
-          if (current.code === '0' && current.value.toUpperCase() === 'VERTEX') {
-            let x, y;
-            i++;
-            while (i < pairs.length && !(pairs[i].code === '0' && ['VERTEX', 'SEQEND'].includes(pairs[i].value.toUpperCase()))) {
-              if (pairs[i].code === '10') x = parseFloat(pairs[i].value);
-              if (pairs[i].code === '20') y = parseFloat(pairs[i].value);
-              i++;
-            }
-            if (isFinite(x) && isFinite(y)) points.push({ x, y });
-            continue;
-          }
-          i++;
-        }
-        if (points.length > 1) pushEntity({ type: 'POLYLINE', points, closed });
-        continue;
-      }
-    }
-    i++;
-  }
-
-  const bounds = computeBounds(entities);
-  return { entities, bounds };
-}
-
-function computeBounds(entities) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const include = (x, y) => {
-    if (!isFinite(x) || !isFinite(y)) return;
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-  };
-
-  for (const e of entities) {
-    if (e.type === 'LINE') {
-      include(e.x1, e.y1); include(e.x2, e.y2);
-    } else if (e.type === 'CIRCLE' || e.type === 'ARC') {
-      include(e.cx - e.r, e.cy - e.r);
-      include(e.cx + e.r, e.cy + e.r);
-    } else if (e.type === 'POLYLINE') {
-      e.points.forEach(p => include(p.x, p.y));
-    }
-  }
-
-  if (!isFinite(minX)) return null;
-  return { minX, minY, maxX, maxY };
-}
-
-function esc(text) {
-  return String(text ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function degToRad(d) { return d * Math.PI / 180; }
-
-function svgArcPath(cx, cy, r, startAngle, endAngle, tx, ty, scale) {
-  const sx = tx(cx + Math.cos(degToRad(startAngle)) * r);
-  const sy = ty(cy + Math.sin(degToRad(startAngle)) * r);
-  const ex = tx(cx + Math.cos(degToRad(endAngle)) * r);
-  const ey = ty(cy + Math.sin(degToRad(endAngle)) * r);
-  let delta = endAngle - startAngle;
-  if (delta < 0) delta += 360;
-  const largeArc = delta > 180 ? 1 : 0;
-  return `M ${sx} ${sy} A ${r * scale} ${r * scale} 0 ${largeArc} 1 ${ex} ${ey}`;
-}
-
-function renderGeometrySvg(entities, bounds, originX, originY, drawW, drawH) {
-  const srcW = Math.max(0.0001, bounds.maxX - bounds.minX);
-  const srcH = Math.max(0.0001, bounds.maxY - bounds.minY);
-  const scale = Math.min(drawW / srcW, drawH / srcH);
-  const offsetX = originX + (drawW - srcW * scale) / 2;
-  const offsetY = originY + (drawH - srcH * scale) / 2;
-
-  const tx = x => offsetX + (x - bounds.minX) * scale;
-  const ty = y => originY + drawH - ((y - bounds.minY) * scale + (drawH - srcH * scale) / 2);
-
-  let out = '';
-  for (const e of entities) {
-    if (e.type === 'LINE') {
-      out += `<line x1="${tx(e.x1)}" y1="${ty(e.y1)}" x2="${tx(e.x2)}" y2="${ty(e.y2)}" stroke="#111" stroke-width="1.2" />`;
-    } else if (e.type === 'CIRCLE') {
-      out += `<circle cx="${tx(e.cx)}" cy="${ty(e.cy)}" r="${e.r * scale}" fill="none" stroke="#111" stroke-width="1.2" />`;
-    } else if (e.type === 'ARC') {
-      out += `<path d="${svgArcPath(e.cx, e.cy, e.r, e.startAngle, e.endAngle, tx, ty, scale)}" fill="none" stroke="#111" stroke-width="1.2" />`;
-    } else if (e.type === 'POLYLINE') {
-      const points = e.points.map(p => `${tx(p.x)},${ty(p.y)}`).join(' ');
-      out += `<polyline points="${points}" fill="none" stroke="#111" stroke-width="1.2" ${e.closed ? 'stroke-linejoin="round"' : ''} />`;
-      if (e.closed && e.points.length > 2) {
-        out += `<line x1="${tx(e.points[e.points.length - 1].x)}" y1="${ty(e.points[e.points.length - 1].y)}" x2="${tx(e.points[0].x)}" y2="${ty(e.points[0].y)}" stroke="#111" stroke-width="1.2" />`;
-      }
-    }
-  }
-  return out;
-}
-
-function renderDimensionLine(x1, y1, x2, y2, text, rotate = false) {
-  const markerA = rotate
-    ? `<line x1="${x1}" y1="${y1}" x2="${x1}" y2="${y1 + 12}" stroke="#111" stroke-width="1" />
-       <line x1="${x2}" y1="${y2}" x2="${x2}" y2="${y2 - 12}" stroke="#111" stroke-width="1" />`
-    : `<line x1="${x1}" y1="${y1}" x2="${x1 + 12}" y2="${y1}" stroke="#111" stroke-width="1" />
-       <line x1="${x2}" y1="${y2}" x2="${x2 - 12}" y2="${y2}" stroke="#111" stroke-width="1" />`;
-  const tx = rotate ? x1 - 12 : (x1 + x2) / 2;
-  const ty = rotate ? (y1 + y2) / 2 : y1 - 6;
-  return `
-    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="1" />
-    ${markerA}
-    <text x="${tx}" y="${ty}" font-size="14" text-anchor="middle" ${rotate ? `transform="rotate(-90 ${tx} ${ty})"` : ''}>${esc(text)}</text>`;
-}
-
-function generateBlueprint() {
+function createBlueprintSvg() {
   if (!state.entities.length || !state.bounds) {
-    setStatus('Load a DXF file first.', true);
-    return;
+    setMessage("Load a DXF before generating a blueprint.", true);
+    return null;
   }
 
-  const title = els.drawingTitle.value.trim() || 'Blueprint Drawing';
-  const project = els.projectName.value.trim() || 'Project';
-  const units = els.units.value;
-  const realWidth = parseFloat(els.realWidth.value);
-  const realHeight = parseFloat(els.realHeight.value);
-  const drawingNumber = els.drawingNumber.value.trim() || 'A-001';
-  const revision = els.revision.value.trim() || '0';
-  const drawnBy = els.drawnBy.value.trim() || 'Unknown';
-  const notes = els.notes.value.trim();
+  const widthValue = parseFloat(controls.actualWidth.value);
+  const heightValue = parseFloat(controls.actualHeight.value);
 
-  if (!(realWidth > 0) || !(realHeight > 0)) {
-    setStatus('Enter positive real width and height values.', true);
-    return;
+  if (!Number.isFinite(widthValue) || !Number.isFinite(heightValue)) {
+    setMessage("Enter both actual width and actual height.", true);
+    return null;
   }
 
-  const pageW = 1400;
-  const pageH = 990;
-  const margin = 40;
-  const titleBlockH = 150;
-  const drawX = 110;
-  const drawY = 80;
-  const drawW = pageW - 220;
-  const drawH = pageH - titleBlockH - 150;
-  const today = new Date().toISOString().slice(0, 10);
+  if (widthValue <= 0 || heightValue <= 0) {
+    setMessage("Actual dimensions must be greater than zero.", true);
+    return null;
+  }
 
-  const sourceW = Math.max(0.0001, state.bounds.maxX - state.bounds.minX);
-  const sourceH = Math.max(0.0001, state.bounds.maxY - state.bounds.minY);
-  const xScale = realWidth / sourceW;
-  const yScale = realHeight / sourceH;
-  const scaleNote = `Scaled to ${formatNum(realWidth)} ${units} × ${formatNum(realHeight)} ${units}`;
+  const units = controls.units.value;
+  const title = controls.drawingTitle.value.trim() || "Untitled Drawing";
+  const project = controls.projectName.value.trim() || "Project not specified";
+  const notes = controls.notes.value.trim() || "No notes provided.";
+  const revision = controls.revision.value.trim() || "Rev A";
+  const page = mapPageSize();
 
-  const geometry = renderGeometrySvg(state.entities, state.bounds, drawX, drawY, drawW, drawH);
+  const pxPerIn = 96;
+  const pageWidth = page.widthIn * pxPerIn;
+  const pageHeight = page.heightIn * pxPerIn;
 
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="${pageW}" height="${pageH}" viewBox="0 0 ${pageW} ${pageH}">
-    <defs>
-      <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e5e7eb" stroke-width="1"/>
-      </pattern>
-    </defs>
-    <rect width="100%" height="100%" fill="#fff" />
-    <rect x="${margin}" y="${margin}" width="${pageW - margin * 2}" height="${pageH - margin * 2}" fill="none" stroke="#111" stroke-width="2" />
-    <rect x="${drawX}" y="${drawY}" width="${drawW}" height="${drawH}" fill="url(#grid)" stroke="#111" stroke-width="1.5" />
+  const margin = 32;
+  const titleBlockHeight = 140;
+  const drawingX = margin + 10;
+  const drawingY = margin + 10;
+  const drawingWidth = pageWidth - margin * 2 - 20;
+  const drawingHeight = pageHeight - margin * 2 - titleBlockHeight - 20;
 
-    <text x="${margin + 10}" y="${margin - 12 + 30}" font-family="Arial" font-size="30" font-weight="700">${esc(title)}</text>
-    <text x="${pageW - margin - 10}" y="${margin - 12 + 30}" font-family="Arial" font-size="14" text-anchor="end">DXF Blueprint Generator</text>
+  const srcWidth = Math.max(0.0001, state.bounds.maxX - state.bounds.minX);
+  const srcHeight = Math.max(0.0001, state.bounds.maxY - state.bounds.minY);
 
-    ${geometry}
+  const uniformScale = Math.min(widthValue / srcWidth, heightValue / srcHeight);
+  const scaledWidth = srcWidth * uniformScale;
+  const scaledHeight = srcHeight * uniformScale;
 
-    ${renderDimensionLine(drawX, drawY + drawH + 36, drawX + drawW, drawY + drawH + 36, `${formatNum(realWidth)} ${units}`)}
-    ${renderDimensionLine(drawX - 36, drawY + drawH, drawX - 36, drawY, `${formatNum(realHeight)} ${units}`, true)}
+  const drawScale = Math.min(drawingWidth / srcWidth, drawingHeight / srcHeight);
+  const offsetX = drawingX + (drawingWidth - srcWidth * drawScale) / 2;
+  const offsetY = drawingY + (drawingHeight - srcHeight * drawScale) / 2;
 
-    <rect x="${margin}" y="${pageH - titleBlockH - margin}" width="${pageW - margin * 2}" height="${titleBlockH}" fill="#fff" stroke="#111" stroke-width="2" />
-    <line x1="${margin}" y1="${pageH - titleBlockH - margin + 48}" x2="${pageW - margin}" y2="${pageH - titleBlockH - margin + 48}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 720}" y1="${pageH - titleBlockH - margin}" x2="${margin + 720}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 930}" y1="${pageH - titleBlockH - margin}" x2="${margin + 930}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 1080}" y1="${pageH - titleBlockH - margin}" x2="${margin + 1080}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 1170}" y1="${pageH - titleBlockH - margin}" x2="${margin + 1170}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
+  const tx = (x) => offsetX + (x - state.bounds.minX) * drawScale;
+  const ty = (y) => pageHeight - (offsetY + (y - state.bounds.minY) * drawScale);
 
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 30}" font-size="14" font-weight="700">PROJECT</text>
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 92}" font-size="20">${esc(project)}</text>
+  const geometrySvg = state.entities
+    .map((entity) => entityToSvg(entity, tx, ty, drawScale, "#111", 1.1))
+    .join("");
 
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">DRAWING NO.</text>
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${esc(drawingNumber)}</text>
+  const generated = todayStamp();
+  const disclaim = "Concept / field-use layout. Not for fabrication without field verification.";
+  const scaleNote = `Scaled proportionally from DXF bounds to ${formatNumber(widthValue)} ${units} x ${formatNumber(heightValue)} ${units}.`;
 
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">REV</text>
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${esc(revision)}</text>
+  const blueprint = `<svg xmlns="http://www.w3.org/2000/svg" width="${pageWidth}" height="${pageHeight}" viewBox="0 0 ${pageWidth} ${pageHeight}">
+    <rect width="100%" height="100%" fill="#ffffff" />
+    <rect x="${margin}" y="${margin}" width="${pageWidth - margin * 2}" height="${pageHeight - margin * 2}" fill="none" stroke="#111" stroke-width="1.8" />
 
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">DATE</text>
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${today}</text>
+    <rect x="${drawingX}" y="${drawingY}" width="${drawingWidth}" height="${drawingHeight}" fill="#ffffff" stroke="#222" stroke-width="1" />
+    ${geometrySvg}
 
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">DRAWN BY</text>
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${esc(drawnBy)}</text>
+    <rect x="${margin}" y="${pageHeight - margin - titleBlockHeight}" width="${pageWidth - margin * 2}" height="${titleBlockHeight}" fill="#fbfcfe" stroke="#111" stroke-width="1.8" />
+    <line x1="${margin}" y1="${pageHeight - margin - titleBlockHeight + 40}" x2="${pageWidth - margin}" y2="${pageHeight - margin - titleBlockHeight + 40}" stroke="#111" stroke-width="1" />
+    <line x1="${pageWidth - margin - 290}" y1="${pageHeight - margin - titleBlockHeight}" x2="${pageWidth - margin - 290}" y2="${pageHeight - margin}" stroke="#111" stroke-width="1" />
+    <line x1="${pageWidth - margin - 200}" y1="${pageHeight - margin - titleBlockHeight}" x2="${pageWidth - margin - 200}" y2="${pageHeight - margin}" stroke="#111" stroke-width="1" />
+    <line x1="${pageWidth - margin - 110}" y1="${pageHeight - margin - titleBlockHeight}" x2="${pageWidth - margin - 110}" y2="${pageHeight - margin}" stroke="#111" stroke-width="1" />
 
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 72}" font-size="12" font-weight="700">NOTES</text>
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 112}" font-size="13">${esc(notes).slice(0, 145)}</text>
+    <text x="${margin + 10}" y="${pageHeight - margin - titleBlockHeight + 25}" font-size="13" font-weight="700" font-family="Arial">Drawing Title</text>
+    <text x="${margin + 10}" y="${pageHeight - margin - titleBlockHeight + 60}" font-size="18" font-family="Arial">${escapeXml(title)}</text>
 
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">SOURCE FILE</text>
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${esc(state.fileName || 'Uploaded DXF')}</text>
+    <text x="${margin + 10}" y="${pageHeight - margin - titleBlockHeight + 87}" font-size="12" font-weight="700" font-family="Arial">Project / Customer</text>
+    <text x="${margin + 10}" y="${pageHeight - margin - titleBlockHeight + 104}" font-size="13" font-family="Arial">${escapeXml(project)}</text>
 
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">OVERALL SIZE</text>
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${formatNum(realWidth)} × ${formatNum(realHeight)} ${units}</text>
+    <text x="${margin + 10}" y="${pageHeight - margin - titleBlockHeight + 124}" font-size="11" font-family="Arial">${escapeXml(disclaim)}</text>
 
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">SOURCE BBOX</text>
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${formatNum(sourceW)} × ${formatNum(sourceH)}</text>
+    <text x="${pageWidth - margin - 280}" y="${pageHeight - margin - titleBlockHeight + 24}" font-size="11" font-weight="700" font-family="Arial">BlueprintCaddy</text>
+    <text x="${pageWidth - margin - 280}" y="${pageHeight - margin - titleBlockHeight + 58}" font-size="11" font-family="Arial">Source File: ${escapeXml(state.fileName || "Unknown")}</text>
+    <text x="${pageWidth - margin - 280}" y="${pageHeight - margin - titleBlockHeight + 74}" font-size="11" font-family="Arial">Date Generated: ${generated}</text>
+    <text x="${pageWidth - margin - 280}" y="${pageHeight - margin - titleBlockHeight + 90}" font-size="11" font-family="Arial">Page Size: ${escapeXml(page.name)}</text>
+    <text x="${pageWidth - margin - 280}" y="${pageHeight - margin - titleBlockHeight + 106}" font-size="11" font-family="Arial">Actual Width: ${formatNumber(widthValue)} ${escapeXml(units)}</text>
+    <text x="${pageWidth - margin - 280}" y="${pageHeight - margin - titleBlockHeight + 122}" font-size="11" font-family="Arial">Actual Height: ${formatNumber(heightValue)} ${escapeXml(units)}</text>
 
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">SCALE INFO</text>
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${esc(scaleNote)}</text>
+    <text x="${pageWidth - margin - 190}" y="${pageHeight - margin - titleBlockHeight + 24}" font-size="11" font-weight="700" font-family="Arial">Revision</text>
+    <text x="${pageWidth - margin - 190}" y="${pageHeight - margin - titleBlockHeight + 58}" font-size="16" font-family="Arial">${escapeXml(revision)}</text>
 
-    <text x="${drawX}" y="${drawY - 18}" font-size="13">X Scale: ${xScale.toFixed(4)} per DXF unit</text>
-    <text x="${drawX + 240}" y="${drawY - 18}" font-size="13">Y Scale: ${yScale.toFixed(4)} per DXF unit</text>
+    <text x="${pageWidth - margin - 100}" y="${pageHeight - margin - titleBlockHeight + 24}" font-size="11" font-weight="700" font-family="Arial">Scale Note</text>
+    <text x="${pageWidth - margin - 100}" y="${pageHeight - margin - titleBlockHeight + 58}" font-size="10.5" font-family="Arial">${escapeXml(scaleNote)}</text>
+    <text x="${pageWidth - margin - 100}" y="${pageHeight - margin - titleBlockHeight + 74}" font-size="10.5" font-family="Arial">Resulting scaled box: ${formatNumber(scaledWidth)} x ${formatNumber(scaledHeight)} ${escapeXml(units)}</text>
+
+    <text x="${drawingX}" y="${drawingY - 8}" font-size="11" font-family="Arial">Dimension summary: ${formatNumber(widthValue)} x ${formatNumber(heightValue)} ${escapeXml(units)}</text>
+    <text x="${drawingX + 360}" y="${drawingY - 8}" font-size="11" font-family="Arial">${escapeXml(scaleNote)}</text>
+
+    <foreignObject x="${margin + 8}" y="${pageHeight - margin - 46}" width="${pageWidth - margin * 2 - 16}" height="36">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial;font-size:10px;color:#222;line-height:1.3;">Notes: ${escapeXml(notes).replace(/\n/g, "<br>")}</div>
+    </foreignObject>
   </svg>`;
 
-  state.blueprintSvg = svg;
-  els.previewWrap.innerHTML = svg;
-  setStatus('Blueprint generated. Use Download SVG or Print / Save PDF.');
+  state.blueprintSvg = blueprint;
+  controls.blueprintPreview.classList.remove("empty");
+  controls.blueprintPreview.innerHTML = blueprint;
+
+  setMessage("Blueprint generated. Export SVG or print/save PDF.", false);
+  return blueprint;
 }
 
-function downloadSvg() {
+function exportSvg() {
   if (!state.blueprintSvg) {
-    setStatus('Generate a blueprint first.', true);
+    setMessage("Generate a blueprint before exporting SVG.", true);
     return;
   }
-  const blob = new Blob([state.blueprintSvg], { type: 'image/svg+xml;charset=utf-8' });
+
+  const fileRoot = (state.fileName || "blueprint").replace(/\.dxf$/i, "");
+  const blob = new Blob([state.blueprintSvg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = (state.fileName.replace(/\.dxf$/i, '') || 'blueprint') + '_blueprint.svg';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${fileRoot}-blueprint.svg`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
   URL.revokeObjectURL(url);
 }
 
-els.dxfFile.addEventListener('change', (e) => {
-  const file = e.target.files?.[0];
-  if (file) readFile(file);
-});
+function resetAll() {
+  state.fileName = "";
+  state.sourceText = "";
+  state.entities = [];
+  state.bounds = null;
+  state.unsupported = [];
+  state.rawSvg = "";
+  state.blueprintSvg = "";
 
-['dragenter', 'dragover'].forEach(type => {
-  els.dropZone.addEventListener(type, (e) => {
-    e.preventDefault();
-    els.dropZone.classList.add('dragover');
-  });
-});
-['dragleave', 'drop'].forEach(type => {
-  els.dropZone.addEventListener(type, (e) => {
-    e.preventDefault();
-    els.dropZone.classList.remove('dragover');
-  });
-});
-els.dropZone.addEventListener('drop', (e) => {
-  const file = e.dataTransfer.files?.[0];
-  if (file) readFile(file);
-});
+  controls.dxfFile.value = "";
+  controls.dropInput.value = "";
+  controls.drawingTitle.value = "";
+  controls.projectName.value = "";
+  controls.actualWidth.value = "";
+  controls.actualHeight.value = "";
+  controls.units.value = "in";
+  controls.pagePreset.value = "letter-landscape";
+  controls.orientation.value = "landscape";
+  controls.revision.value = "Rev A";
+  controls.notes.value = "";
+  controls.dropLabel.textContent = "Drag and drop DXF here, or click Upload DXF above";
+  controls.fileMeta.textContent = "No DXF loaded";
 
-els.generateBtn.addEventListener('click', generateBlueprint);
-els.downloadSvgBtn.addEventListener('click', downloadSvg);
-els.printBtn.addEventListener('click', () => {
-  if (!state.blueprintSvg) {
-    setStatus('Generate a blueprint first.', true);
-    return;
+  controls.rawPreview.classList.add("empty");
+  controls.rawPreview.textContent = "Upload or load sample to see source geometry.";
+  controls.blueprintPreview.classList.add("empty");
+  controls.blueprintPreview.textContent = "Generate blueprint to preview printable sheet.";
+
+  renderUnsupported([]);
+  setMessage("State reset. Load a DXF file to begin.", false);
+}
+
+function wireDragDrop() {
+  ["dragenter", "dragover"].forEach((type) => {
+    controls.dropZone.addEventListener(type, (event) => {
+      event.preventDefault();
+      controls.dropZone.classList.add("dragover");
+    });
+  });
+
+  ["dragleave", "drop"].forEach((type) => {
+    controls.dropZone.addEventListener(type, (event) => {
+      event.preventDefault();
+      controls.dropZone.classList.remove("dragover");
+    });
+  });
+
+  controls.dropZone.addEventListener("drop", (event) => {
+    const file = event.dataTransfer && event.dataTransfer.files ? event.dataTransfer.files[0] : null;
+    readFile(file);
+  });
+}
+
+async function loadSample() {
+  try {
+    const response = await fetch("samples/sample-door.dxf");
+    if (!response.ok) {
+      throw new Error(`Sample not found (${response.status}).`);
+    }
+    const text = await response.text();
+    parseUpload(text, "sample-door.dxf");
+
+    if (!controls.actualWidth.value) controls.actualWidth.value = "36";
+    if (!controls.actualHeight.value) controls.actualHeight.value = "78";
+    if (!controls.drawingTitle.value) controls.drawingTitle.value = "Sample Access Door";
+    if (!controls.projectName.value) controls.projectName.value = "BlueprintCaddy Demo";
+    if (!controls.notes.value) controls.notes.value = "Sample layout generated from included DXF for workflow testing.";
+    createBlueprintSvg();
+  } catch (error) {
+    console.error(error);
+    setMessage(`Could not load sample: ${error.message}`, true);
   }
-  window.print();
-});
+}
 
-['drawingTitle', 'units', 'realWidth', 'realHeight', 'projectName', 'drawingNumber', 'revision', 'drawnBy', 'notes']
-  .forEach(id => els[id].addEventListener('input', () => {
-    if (state.entities.length) generateBlueprint();
-  }));
+function syncPresetAndOrientation() {
+  const [_, presetOrientation] = controls.pagePreset.value.split("-");
+  if (presetOrientation) {
+    controls.orientation.value = presetOrientation;
+  }
+}
+
+function attachEvents() {
+  controls.dxfFile.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
+  controls.dropInput.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
+
+  controls.generateBtn.addEventListener("click", createBlueprintSvg);
+  controls.exportBtn.addEventListener("click", exportSvg);
+  controls.printBtn.addEventListener("click", () => {
+    if (!state.blueprintSvg) {
+      setMessage("Generate a blueprint before printing.", true);
+      return;
+    }
+    window.print();
+  });
+  controls.resetBtn.addEventListener("click", resetAll);
+  controls.loadSampleBtn.addEventListener("click", loadSample);
+
+  controls.pagePreset.addEventListener("change", syncPresetAndOrientation);
+}
+
+wireDragDrop();
+attachEvents();
+resetAll();
