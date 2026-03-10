@@ -22,6 +22,27 @@
   <main class="layout">
     <section class="card controls-card">
       <h2>Blueprint Settings</h2>
+
+      <div class="tool-strip">
+        <label for="dxfFile" class="btn btn-secondary">Upload DXF</label>
+        <button id="createTemplateBtn" class="btn btn-secondary" type="button">Create from Template</button>
+        <button id="generateBtn" class="btn btn-primary" type="button">Generate Blueprint</button>
+        <button id="explainBtn" class="btn btn-secondary" type="button">Explain Blueprint</button>
+        <button id="cutListBtn" class="btn btn-secondary" type="button">Generate Cut List</button>
+      </div>
+
+      <div id="templatePanel" class="template-panel" hidden>
+        <h3>Template Starter</h3>
+        <label>Template Type
+          <select id="templateType">
+            <option value="rect-panel">Rectangular Panel</option>
+            <option value="doghouse">Doghouse</option>
+          </select>
+        </label>
+        <div id="templateFields" class="template-fields"></div>
+        <button id="applyTemplateBtn" class="btn btn-primary" type="button">Create from Template</button>
+      </div>
+
       <label id="dropZone" class="drop-zone">
         <input type="file" id="dxfDropInput" accept=".dxf" hidden />
         <span id="dropLabel">Drag and drop DXF here, or click Upload DXF above</span>
@@ -31,6 +52,20 @@
       <div id="unsupportedPanel" class="unsupported-panel" hidden>
         <strong>Unsupported entities ignored:</strong>
         <ul id="unsupportedList"></ul>
+      </div>
+
+      <div id="explainPanel" class="output-panel" hidden>
+        <h3>Blueprint Explanation</h3>
+        <pre id="explainText"></pre>
+      </div>
+
+      <div id="cutListPanel" class="output-panel" hidden>
+        <h3>Cut List</h3>
+        <pre id="cutListText"></pre>
+        <div class="output-actions">
+          <button id="downloadCutCsvBtn" class="btn btn-secondary" type="button">Download CSV</button>
+          <button id="downloadCutTxtBtn" class="btn btn-secondary" type="button">Download Text</button>
+        </div>
       </div>
 
       <div class="form-grid">
@@ -76,7 +111,6 @@
       </label>
 
       <div class="button-group">
-        <button id="generateBtn" class="btn btn-primary" type="button">Generate Blueprint</button>
         <button id="exportBtn" class="btn btn-secondary" type="button">Export SVG</button>
         <button id="printBtn" class="btn btn-secondary" type="button">Print / Save PDF</button>
         <button id="resetBtn" class="btn btn-ghost" type="button">Reset</button>

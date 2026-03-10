@@ -5,7 +5,10 @@ const state = {
   bounds: null,
   unsupported: [],
   rawSvg: "",
-  blueprintSvg: ""
+  blueprintSvg: "",
+  explanationText: "",
+  cutListText: "",
+  cutListCsv: ""
 };
 
 const PAGE_PRESETS = {
@@ -18,6 +21,19 @@ const controls = {
   dropInput: document.getElementById("dxfDropInput"),
   dropZone: document.getElementById("dropZone"),
   dropLabel: document.getElementById("dropLabel"),
+  createTemplateBtn: document.getElementById("createTemplateBtn"),
+  templatePanel: document.getElementById("templatePanel"),
+  templateType: document.getElementById("templateType"),
+  templateFields: document.getElementById("templateFields"),
+  applyTemplateBtn: document.getElementById("applyTemplateBtn"),
+  explainBtn: document.getElementById("explainBtn"),
+  cutListBtn: document.getElementById("cutListBtn"),
+  explainPanel: document.getElementById("explainPanel"),
+  explainText: document.getElementById("explainText"),
+  cutListPanel: document.getElementById("cutListPanel"),
+  cutListText: document.getElementById("cutListText"),
+  downloadCutCsvBtn: document.getElementById("downloadCutCsvBtn"),
+  downloadCutTxtBtn: document.getElementById("downloadCutTxtBtn"),
   messageBanner: document.getElementById("messageBanner"),
   unsupportedPanel: document.getElementById("unsupportedPanel"),
   unsupportedList: document.getElementById("unsupportedList"),
@@ -180,22 +196,8 @@ function parseUpload(text, fileName) {
       throw new Error("No supported geometry found. Supported: LINE, LWPOLYLINE, POLYLINE, CIRCLE, ARC.");
     }
 
-    state.fileName = fileName;
+    ingestGeometry(parsed.entities, fileName, parsed.unsupported);
     state.sourceText = text;
-    state.entities = parsed.entities;
-    state.bounds = parsed.bounds;
-    state.unsupported = parsed.unsupported;
-    state.rawSvg = renderSourceSvg(parsed.entities, parsed.bounds);
-
-    controls.rawPreview.classList.remove("empty");
-    controls.rawPreview.innerHTML = state.rawSvg;
-
-    const rawWidth = parsed.bounds.maxX - parsed.bounds.minX;
-    const rawHeight = parsed.bounds.maxY - parsed.bounds.minY;
-    controls.fileMeta.textContent = `${fileName} | ${parsed.entities.length} supported entities | Source bounds ${formatNumber(rawWidth)} x ${formatNumber(rawHeight)}`;
-    controls.dropLabel.textContent = `Loaded: ${fileName}`;
-
-    renderUnsupported(parsed.unsupported);
     setMessage("DXF loaded. Enter actual dimensions and click Generate Blueprint.", false);
   } catch (error) {
     console.error(error);
@@ -218,6 +220,294 @@ function readFile(file) {
   reader.onload = () => parseUpload(String(reader.result || ""), file.name);
   reader.onerror = () => setMessage("Could not read file. Try another DXF.", true);
   reader.readAsText(file);
+}
+
+function computeBoundsFromEntities(entities) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  function include(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+
+  entities.forEach((entity) => {
+    if (entity.type === "LINE") {
+      include(entity.x1, entity.y1);
+      include(entity.x2, entity.y2);
+      return;
+    }
+    if (entity.type === "POLYLINE" && Array.isArray(entity.points)) {
+      entity.points.forEach((p) => include(p.x, p.y));
+      return;
+    }
+    if (entity.type === "CIRCLE") {
+      include(entity.cx - entity.r, entity.cy - entity.r);
+      include(entity.cx + entity.r, entity.cy + entity.r);
+      return;
+    }
+    if (entity.type === "ARC") {
+      include(entity.cx - entity.r, entity.cy - entity.r);
+      include(entity.cx + entity.r, entity.cy + entity.r);
+    }
+  });
+
+  if (!Number.isFinite(minX)) {
+    return null;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function ingestGeometry(entities, sourceName, unsupported) {
+  const bounds = computeBoundsFromEntities(entities);
+  if (!bounds) {
+    throw new Error("No supported geometry generated.");
+  }
+
+  state.fileName = sourceName;
+  state.sourceText = "";
+  state.entities = entities;
+  state.bounds = bounds;
+  state.unsupported = unsupported || [];
+  state.rawSvg = renderSourceSvg(entities, bounds);
+
+  controls.rawPreview.classList.remove("empty");
+  controls.rawPreview.innerHTML = state.rawSvg;
+
+  const rawWidth = bounds.maxX - bounds.minX;
+  const rawHeight = bounds.maxY - bounds.minY;
+  controls.fileMeta.textContent = `${sourceName} | ${entities.length} supported entities | Source bounds ${formatNumber(rawWidth)} x ${formatNumber(rawHeight)}`;
+  controls.dropLabel.textContent = `Loaded: ${sourceName}`;
+  renderUnsupported(state.unsupported);
+}
+
+function templateFieldInput(id, label, value, step) {
+  return `<label>${label}<input type=\"number\" id=\"${id}\" step=\"${step || "0.01"}\" value=\"${value}\" min=\"0\" /></label>`;
+}
+
+function renderTemplateFields() {
+  const type = controls.templateType.value;
+  if (type === "doghouse") {
+    controls.templateFields.innerHTML = [
+      templateFieldInput("tplWidth", "Width", "72"),
+      templateFieldInput("tplWallHeight", "Wall Height", "48"),
+      templateFieldInput("tplRoofPeakHeight", "Roof Peak Height", "18"),
+      templateFieldInput("tplDoorWidth", "Door Width", "24"),
+      templateFieldInput("tplDoorHeight", "Door Height", "36")
+    ].join("");
+    return;
+  }
+
+  controls.templateFields.innerHTML = [
+    templateFieldInput("tplWidth", "Width", "36"),
+    templateFieldInput("tplHeight", "Height", "24"),
+    templateFieldInput("tplHoleDiameter", "Hole Diameter", "1"),
+    templateFieldInput("tplHoleOffset", "Hole Offset", "4"),
+    templateFieldInput("tplHoleCount", "Hole Count", "2", "1")
+  ].join("");
+}
+
+function createRectPanelTemplateGeometry(inputs) {
+  const width = Math.max(0.01, inputs.width);
+  const height = Math.max(0.01, inputs.height);
+  const entities = [
+    { type: "LINE", x1: 0, y1: 0, x2: width, y2: 0 },
+    { type: "LINE", x1: width, y1: 0, x2: width, y2: height },
+    { type: "LINE", x1: width, y1: height, x2: 0, y2: height },
+    { type: "LINE", x1: 0, y1: height, x2: 0, y2: 0 }
+  ];
+
+  const holeCount = Math.max(0, Math.floor(inputs.holeCount));
+  const holeOffset = Math.max(0, inputs.holeOffset);
+  const holeRadius = Math.max(0, inputs.holeDiameter / 2);
+  if (holeCount > 0 && holeRadius > 0 && width > holeOffset * 2) {
+    const y = Math.max(holeOffset, Math.min(height - holeOffset, height - holeOffset));
+    for (let i = 0; i < holeCount; i += 1) {
+      const t = holeCount === 1 ? 0.5 : i / (holeCount - 1);
+      const x = holeOffset + t * (width - holeOffset * 2);
+      entities.push({ type: "CIRCLE", cx: x, cy: y, r: holeRadius });
+    }
+  }
+
+  return { entities, width, height, title: "Template Rectangular Panel" };
+}
+
+function createDoghouseTemplateGeometry(inputs) {
+  const width = Math.max(0.01, inputs.width);
+  const wallHeight = Math.max(0.01, inputs.wallHeight);
+  const roofPeakHeight = Math.max(0.01, inputs.roofPeakHeight);
+  const doorWidth = Math.max(0.01, Math.min(inputs.doorWidth, width * 0.95));
+  const doorHeight = Math.max(0.01, Math.min(inputs.doorHeight, wallHeight * 0.95));
+  const peakY = wallHeight + roofPeakHeight;
+  const half = width / 2;
+  const doorLeft = (width - doorWidth) / 2;
+  const doorRight = doorLeft + doorWidth;
+
+  const entities = [
+    { type: "LINE", x1: 0, y1: 0, x2: width, y2: 0 },
+    { type: "LINE", x1: width, y1: 0, x2: width, y2: wallHeight },
+    { type: "LINE", x1: width, y1: wallHeight, x2: half, y2: peakY },
+    { type: "LINE", x1: half, y1: peakY, x2: 0, y2: wallHeight },
+    { type: "LINE", x1: 0, y1: wallHeight, x2: 0, y2: 0 },
+    { type: "LINE", x1: doorLeft, y1: 0, x2: doorLeft, y2: doorHeight },
+    { type: "LINE", x1: doorLeft, y1: doorHeight, x2: doorRight, y2: doorHeight },
+    { type: "LINE", x1: doorRight, y1: doorHeight, x2: doorRight, y2: 0 }
+  ];
+
+  return { entities, width, height: peakY, title: "Template Doghouse Front" };
+}
+
+function applyTemplate() {
+  try {
+    const type = controls.templateType.value;
+    let result;
+
+    if (type === "doghouse") {
+      result = createDoghouseTemplateGeometry({
+        width: parseFloat(document.getElementById("tplWidth")?.value),
+        wallHeight: parseFloat(document.getElementById("tplWallHeight")?.value),
+        roofPeakHeight: parseFloat(document.getElementById("tplRoofPeakHeight")?.value),
+        doorWidth: parseFloat(document.getElementById("tplDoorWidth")?.value),
+        doorHeight: parseFloat(document.getElementById("tplDoorHeight")?.value)
+      });
+    } else {
+      result = createRectPanelTemplateGeometry({
+        width: parseFloat(document.getElementById("tplWidth")?.value),
+        height: parseFloat(document.getElementById("tplHeight")?.value),
+        holeDiameter: parseFloat(document.getElementById("tplHoleDiameter")?.value),
+        holeOffset: parseFloat(document.getElementById("tplHoleOffset")?.value),
+        holeCount: parseFloat(document.getElementById("tplHoleCount")?.value)
+      });
+    }
+
+    ingestGeometry(result.entities, `${type}-template`, []);
+    if (!controls.drawingTitle.value) controls.drawingTitle.value = result.title;
+    if (!controls.projectName.value) controls.projectName.value = "Template Project";
+    controls.actualWidth.value = formatNumber(result.width, 2);
+    controls.actualHeight.value = formatNumber(result.height, 2);
+    if (!controls.notes.value) controls.notes.value = "Generated from BlueprintCaddy template starter.";
+    createBlueprintSvg();
+    setMessage("Template geometry created and loaded.", false);
+  } catch (error) {
+    console.error(error);
+    setMessage("Template creation failed. Check template inputs.", true);
+  }
+}
+
+function currentUnitScales() {
+  const widthValue = parseFloat(controls.actualWidth.value);
+  const heightValue = parseFloat(controls.actualHeight.value);
+  const bounds = state.bounds;
+  if (!bounds) {
+    return null;
+  }
+  const srcWidth = Math.max(0.0001, bounds.maxX - bounds.minX);
+  const srcHeight = Math.max(0.0001, bounds.maxY - bounds.minY);
+  const xScale = Number.isFinite(widthValue) && widthValue > 0 ? widthValue / srcWidth : 1;
+  const yScale = Number.isFinite(heightValue) && heightValue > 0 ? heightValue / srcHeight : 1;
+  return { xScale, yScale };
+}
+
+function buildBlueprintExplanation() {
+  if (!state.entities.length || !state.bounds) {
+    setMessage("Load or create geometry before using Explain Blueprint.", true);
+    return;
+  }
+
+  const units = controls.units.value;
+  const widthValue = parseFloat(controls.actualWidth.value);
+  const heightValue = parseFloat(controls.actualHeight.value);
+  const srcWidth = state.bounds.maxX - state.bounds.minX;
+  const srcHeight = state.bounds.maxY - state.bounds.minY;
+  const rects = detectRectangles(state.entities);
+  const circles = detectCircles(state.entities);
+  const scales = currentUnitScales();
+
+  const overallWidth = Number.isFinite(widthValue) && widthValue > 0 ? widthValue : srcWidth;
+  const overallHeight = Number.isFinite(heightValue) && heightValue > 0 ? heightValue : srcHeight;
+  const avgCircleDiameter = circles.length ? circles.reduce((sum, c) => sum + c.rawDiameter * ((scales?.xScale || 1) + (scales?.yScale || 1)) / 2, 0) / circles.length : 0;
+
+  const text = [
+    "This drawing shows a 2D blueprint layout.",
+    "",
+    "Overall size:",
+    `${formatNumber(overallWidth)} ${units} wide by ${formatNumber(overallHeight)} ${units} tall.`,
+    "",
+    "Features detected:",
+    `- ${circles.length} circular feature${circles.length === 1 ? "" : "s"}${circles.length ? ` (avg diameter ${formatNumber(avgCircleDiameter)} ${units})` : ""}`,
+    `- ${Math.max(0, rects.length - 1)} inner rectangular feature${Math.max(0, rects.length - 1) === 1 ? "" : "s"}`,
+    "",
+    "All dimensions shown on the blueprint should be verified before fabrication."
+  ].join("\n");
+
+  state.explanationText = text;
+  controls.explainText.textContent = text;
+  controls.explainPanel.hidden = false;
+}
+
+function buildCutList() {
+  if (!state.entities.length || !state.bounds) {
+    setMessage("Load or create geometry before generating a cut list.", true);
+    return;
+  }
+
+  const rectangles = detectRectangles(state.entities);
+  if (!rectangles.length) {
+    setMessage("No rectangular features detected for cut list generation.", true);
+    return;
+  }
+
+  const units = controls.units.value;
+  const scales = currentUnitScales();
+  const rows = [];
+
+  rectangles
+    .slice()
+    .sort((a, b) => (b.rawWidth * b.rawHeight) - (a.rawWidth * a.rawHeight))
+    .forEach((rect, index) => {
+      rows.push({
+        part: index === 0 ? "Panel" : `Feature ${index}`,
+        qty: 1,
+        width: rect.rawWidth * (scales?.xScale || 1),
+        height: rect.rawHeight * (scales?.yScale || 1)
+      });
+    });
+
+  const area = rows.reduce((sum, row) => sum + row.width * row.height * row.qty, 0);
+  const textLines = ["CUT LIST", ""];
+  rows.forEach((row) => {
+    textLines.push(`${row.part}`);
+    textLines.push(`${row.qty} x ${formatNumber(row.width)} ${units} x ${formatNumber(row.height)} ${units}`);
+    textLines.push("");
+  });
+  textLines.push(`Material estimate area: ${formatNumber(area)} square ${units}`);
+
+  const csvLines = ["Part,Qty,Width,Height,Units"];
+  rows.forEach((row) => {
+    csvLines.push(`${row.part},${row.qty},${formatNumber(row.width)},${formatNumber(row.height)},${units}`);
+  });
+
+  state.cutListText = textLines.join("\n");
+  state.cutListCsv = csvLines.join("\n");
+  controls.cutListText.textContent = state.cutListText;
+  controls.cutListPanel.hidden = false;
+}
+
+function downloadTextFile(filename, content, contentType) {
+  const blob = new Blob([content], { type: contentType || "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function normalizeBounds(minX, minY, maxX, maxY) {
@@ -913,6 +1203,9 @@ function resetAll() {
   state.unsupported = [];
   state.rawSvg = "";
   state.blueprintSvg = "";
+  state.explanationText = "";
+  state.cutListText = "";
+  state.cutListCsv = "";
 
   controls.dxfFile.value = "";
   controls.dropInput.value = "";
@@ -925,6 +1218,7 @@ function resetAll() {
   controls.orientation.value = "landscape";
   controls.revision.value = "Rev A";
   controls.notes.value = "";
+  controls.templateType.value = "rect-panel";
   controls.dropLabel.textContent = "Drag and drop DXF here, or click Upload DXF above";
   controls.fileMeta.textContent = "No DXF loaded";
 
@@ -932,6 +1226,12 @@ function resetAll() {
   controls.rawPreview.textContent = "Upload or load sample to see source geometry.";
   controls.blueprintPreview.classList.add("empty");
   controls.blueprintPreview.textContent = "Generate blueprint to preview printable sheet.";
+  controls.explainPanel.hidden = true;
+  controls.cutListPanel.hidden = true;
+  controls.explainText.textContent = "";
+  controls.cutListText.textContent = "";
+  controls.templatePanel.hidden = true;
+  renderTemplateFields();
 
   renderUnsupported([]);
   setMessage("State reset. Load a DXF file to begin.", false);
@@ -991,6 +1291,8 @@ function attachEvents() {
   controls.dropInput.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
 
   controls.generateBtn.addEventListener("click", createBlueprintSvg);
+  controls.explainBtn.addEventListener("click", buildBlueprintExplanation);
+  controls.cutListBtn.addEventListener("click", buildCutList);
   controls.exportBtn.addEventListener("click", exportSvg);
   controls.printBtn.addEventListener("click", () => {
     if (!state.blueprintSvg) {
@@ -1001,10 +1303,30 @@ function attachEvents() {
   });
   controls.resetBtn.addEventListener("click", resetAll);
   controls.loadSampleBtn.addEventListener("click", loadSample);
+  controls.createTemplateBtn.addEventListener("click", () => {
+    controls.templatePanel.hidden = !controls.templatePanel.hidden;
+  });
+  controls.templateType.addEventListener("change", renderTemplateFields);
+  controls.applyTemplateBtn.addEventListener("click", applyTemplate);
+  controls.downloadCutCsvBtn.addEventListener("click", () => {
+    if (!state.cutListCsv) {
+      setMessage("Generate cut list before downloading CSV.", true);
+      return;
+    }
+    downloadTextFile("blueprint-cut-list.csv", state.cutListCsv, "text/csv;charset=utf-8");
+  });
+  controls.downloadCutTxtBtn.addEventListener("click", () => {
+    if (!state.cutListText) {
+      setMessage("Generate cut list before downloading text.", true);
+      return;
+    }
+    downloadTextFile("blueprint-cut-list.txt", state.cutListText, "text/plain;charset=utf-8");
+  });
 
   controls.pagePreset.addEventListener("change", syncPresetAndOrientation);
 }
 
+renderTemplateFields();
 wireDragDrop();
 attachEvents();
 resetAll();
