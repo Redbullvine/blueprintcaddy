@@ -332,99 +332,151 @@ function detectRectanglesFromPolylines(entities, tolerance) {
 }
 
 function detectRectanglesFromLineLoops(entities, tolerance) {
-  const horizontals = [];
-  const verticals = [];
+  const corners = [];
+  const edgeMap = new Map();
+
+  function findOrCreateCorner(x, y) {
+    for (let i = 0; i < corners.length; i += 1) {
+      const corner = corners[i];
+      if (approxEqual(corner.x, x, tolerance) && approxEqual(corner.y, y, tolerance)) {
+        return i;
+      }
+    }
+    corners.push({ x, y });
+    return corners.length - 1;
+  }
+
+  function edgeKey(a, b) {
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    return `${lo}:${hi}`;
+  }
+
+  function pushEdge(index, a, b) {
+    if (a === b) {
+      return;
+    }
+    const key = edgeKey(a, b);
+    const entry = { index, a, b };
+    const current = edgeMap.get(key) || [];
+    current.push(entry);
+    edgeMap.set(key, current);
+  }
 
   entities.forEach((entity, index) => {
     if (entity.type !== "LINE") {
       return;
     }
-
-    const x1 = entity.x1;
-    const y1 = entity.y1;
-    const x2 = entity.x2;
-    const y2 = entity.y2;
-
-    if (approxEqual(y1, y2, tolerance)) {
-      const y = (y1 + y2) / 2;
-      horizontals.push({
-        index,
-        y,
-        xMin: Math.min(x1, x2),
-        xMax: Math.max(x1, x2)
-      });
+    const { x1, y1, x2, y2 } = entity;
+    const isHorizontal = approxEqual(y1, y2, tolerance);
+    const isVertical = approxEqual(x1, x2, tolerance);
+    if (!isHorizontal && !isVertical) {
       return;
     }
-
-    if (approxEqual(x1, x2, tolerance)) {
-      const x = (x1 + x2) / 2;
-      verticals.push({
-        index,
-        x,
-        yMin: Math.min(y1, y2),
-        yMax: Math.max(y1, y2)
-      });
-    }
+    const a = findOrCreateCorner(x1, y1);
+    const b = findOrCreateCorner(x2, y2);
+    pushEdge(index, a, b);
   });
 
+  function uniqueSorted(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const out = [];
+    sorted.forEach((value) => {
+      if (!out.length || !approxEqual(out[out.length - 1], value, tolerance)) {
+        out.push(value);
+      }
+    });
+    return out;
+  }
+
+  function cornerAt(x, y) {
+    for (let i = 0; i < corners.length; i += 1) {
+      const c = corners[i];
+      if (approxEqual(c.x, x, tolerance) && approxEqual(c.y, y, tolerance)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function edgeBetween(a, b) {
+    return edgeMap.get(edgeKey(a, b)) || [];
+  }
+
+  const xValues = uniqueSorted(corners.map((c) => c.x));
+  const yValues = uniqueSorted(corners.map((c) => c.y));
   const rectangles = [];
 
-  for (let i = 0; i < horizontals.length; i += 1) {
-    const h1 = horizontals[i];
-    for (let j = i + 1; j < horizontals.length; j += 1) {
-      const h2 = horizontals[j];
-
-      if (!approxEqual(h1.xMin, h2.xMin, tolerance) || !approxEqual(h1.xMax, h2.xMax, tolerance)) {
-        continue;
-      }
-      if (approxEqual(h1.y, h2.y, tolerance)) {
+  for (let xi = 0; xi < xValues.length; xi += 1) {
+    for (let xj = xi + 1; xj < xValues.length; xj += 1) {
+      const minX = xValues[xi];
+      const maxX = xValues[xj];
+      if (maxX - minX <= tolerance) {
         continue;
       }
 
-      const minX = Math.min(h1.xMin, h1.xMax);
-      const maxX = Math.max(h1.xMin, h1.xMax);
-      const minY = Math.min(h1.y, h2.y);
-      const maxY = Math.max(h1.y, h2.y);
-
-      if (maxX - minX <= tolerance || maxY - minY <= tolerance) {
-        continue;
-      }
-
-      const leftCandidates = verticals.filter((v) =>
-        approxEqual(v.x, minX, tolerance) &&
-        approxEqual(v.yMin, minY, tolerance) &&
-        approxEqual(v.yMax, maxY, tolerance)
-      );
-      if (!leftCandidates.length) {
-        continue;
-      }
-
-      const rightCandidates = verticals.filter((v) =>
-        approxEqual(v.x, maxX, tolerance) &&
-        approxEqual(v.yMin, minY, tolerance) &&
-        approxEqual(v.yMax, maxY, tolerance)
-      );
-      if (!rightCandidates.length) {
-        continue;
-      }
-
-      let rectangleFound = false;
-      for (const left of leftCandidates) {
-        for (const right of rightCandidates) {
-          const lineIndexes = new Set([h1.index, h2.index, left.index, right.index]);
-          if (lineIndexes.size !== 4) {
+      for (let yi = 0; yi < yValues.length; yi += 1) {
+        for (let yj = yi + 1; yj < yValues.length; yj += 1) {
+          const minY = yValues[yi];
+          const maxY = yValues[yj];
+          if (maxY - minY <= tolerance) {
             continue;
           }
-          rectangles.push({
-            rawBounds: { minX, minY, maxX, maxY },
-            rawWidth: maxX - minX,
-            rawHeight: maxY - minY
-          });
-          rectangleFound = true;
-          break;
-        }
-        if (rectangleFound) {
-          break;
+
+          const lb = cornerAt(minX, minY);
+          const lt = cornerAt(minX, maxY);
+          const rb = cornerAt(maxX, minY);
+          const rt = cornerAt(maxX, maxY);
+          if ([lb, lt, rb, rt].some((id) => id < 0)) {
+            continue;
+          }
+
+          const uniqueCorners = new Set([lb, lt, rb, rt]);
+          if (uniqueCorners.size !== 4) {
+            continue;
+          }
+
+          const leftEdges = edgeBetween(lb, lt);
+          const rightEdges = edgeBetween(rb, rt);
+          const topEdges = edgeBetween(lt, rt);
+          const bottomEdges = edgeBetween(lb, rb);
+          if (!leftEdges.length || !rightEdges.length || !topEdges.length || !bottomEdges.length) {
+            continue;
+          }
+
+          let found = false;
+          for (const left of leftEdges) {
+            for (const right of rightEdges) {
+              for (const top of topEdges) {
+                for (const bottom of bottomEdges) {
+                  const lineIndexes = new Set([left.index, right.index, top.index, bottom.index]);
+                  if (lineIndexes.size !== 4) {
+                    continue;
+                  }
+
+                  const degree = new Map([[lb, 0], [lt, 0], [rb, 0], [rt, 0]]);
+                  [[lb, lt], [rb, rt], [lt, rt], [lb, rb]].forEach(([a, b]) => {
+                    degree.set(a, degree.get(a) + 1);
+                    degree.set(b, degree.get(b) + 1);
+                  });
+                  if (![...degree.values()].every((count) => count === 2)) {
+                    continue;
+                  }
+
+                  rectangles.push({
+                    rawBounds: { minX, minY, maxX, maxY },
+                    rawWidth: maxX - minX,
+                    rawHeight: maxY - minY
+                  });
+                  found = true;
+                  break;
+                }
+                if (found) break;
+              }
+              if (found) break;
+            }
+            if (found) break;
+          }
         }
       }
     }
@@ -452,7 +504,7 @@ function dedupeRectangles(rectangles, tolerance) {
 }
 
 function detectRectangles(entities) {
-  const tolerance = 1e-4;
+  const tolerance = 1e-3;
   const fromPolylines = detectRectanglesFromPolylines(entities, tolerance);
   const fromLineLoops = detectRectanglesFromLineLoops(entities, tolerance);
   return dedupeRectangles(fromPolylines.concat(fromLineLoops), tolerance);
