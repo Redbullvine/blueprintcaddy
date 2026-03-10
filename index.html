@@ -3,97 +3,110 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DXF Blueprint Generator</title>
+  <title>BlueprintCaddy.app | DXF to Blueprint</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="panel controls">
-      <h1>DXF Blueprint Generator</h1>
-      <p class="sub">Drop in a DXF, enter real dimensions, and generate a clean printable blueprint.</p>
+  <header class="app-header">
+    <div>
+      <p class="kicker">BlueprintCaddy.app</p>
+      <h1>Drop in a DXF. Enter dimensions. Generate professional blueprints.</h1>
+    </div>
+    <div class="header-actions">
+      <button id="loadSampleBtn" class="btn btn-secondary" type="button">Load Sample</button>
+      <label for="dxfFile" class="btn btn-primary">Upload DXF</label>
+      <input type="file" id="dxfFile" accept=".dxf" hidden />
+    </div>
+  </header>
 
-      <label class="file-drop" id="dropZone">
-        <input type="file" id="dxfFile" accept=".dxf" />
-        <span id="fileLabel">Drop DXF here or click to browse</span>
+  <main class="layout">
+    <section class="card controls-card">
+      <h2>Blueprint Settings</h2>
+      <label id="dropZone" class="drop-zone">
+        <input type="file" id="dxfDropInput" accept=".dxf" hidden />
+        <span id="dropLabel">Drag and drop DXF here, or click Upload DXF above</span>
       </label>
 
+      <div id="messageBanner" class="message-banner" role="status" aria-live="polite">Load a DXF file to begin.</div>
+      <div id="unsupportedPanel" class="unsupported-panel" hidden>
+        <strong>Unsupported entities ignored:</strong>
+        <ul id="unsupportedList"></ul>
+      </div>
+
       <div class="form-grid">
-        <label>
-          Drawing Title
-          <input type="text" id="drawingTitle" value="Blueprint Drawing" />
+        <label>Drawing Title
+          <input id="drawingTitle" type="text" placeholder="Main Entry Door" />
         </label>
-        <label>
-          Units
+        <label>Project / Customer
+          <input id="projectName" type="text" placeholder="Camp Utility Trailer" />
+        </label>
+        <label>Actual Width
+          <input id="actualWidth" type="number" min="0" step="0.001" placeholder="36" />
+        </label>
+        <label>Actual Height
+          <input id="actualHeight" type="number" min="0" step="0.001" placeholder="78" />
+        </label>
+        <label>Units
           <select id="units">
             <option value="in">inches</option>
             <option value="ft">feet</option>
             <option value="mm">mm</option>
-            <option value="cm">cm</option>
           </select>
         </label>
-        <label>
-          Real Width
-          <input type="number" id="realWidth" step="0.001" value="28" />
+        <label>Page Preset
+          <select id="pagePreset">
+            <option value="letter-landscape">Letter landscape</option>
+            <option value="letter-portrait">Letter portrait</option>
+            <option value="tabloid-landscape">Tabloid landscape</option>
+          </select>
         </label>
-        <label>
-          Real Height
-          <input type="number" id="realHeight" step="0.001" value="24" />
+        <label>Orientation
+          <select id="orientation">
+            <option value="landscape">Landscape</option>
+            <option value="portrait">Portrait</option>
+          </select>
         </label>
-        <label>
-          Client / Project
-          <input type="text" id="projectName" value="Field Concept" />
-        </label>
-        <label>
-          Drawing Number
-          <input type="text" id="drawingNumber" value="A-001" />
-        </label>
-        <label>
-          Revision
-          <input type="text" id="revision" value="0" />
-        </label>
-        <label>
-          Drawn By
-          <input type="text" id="drawnBy" value="ChatGPT" />
+        <label>Revision
+          <input id="revision" type="text" value="Rev A" />
         </label>
       </div>
 
-      <label>
-        Notes
-        <textarea id="notes" rows="5">Approximate concept blueprint generated from imported DXF geometry and entered overall dimensions.</textarea>
+      <label>Notes
+        <textarea id="notes" rows="4" placeholder="Concept / field-use layout. Verify before fabrication."></textarea>
       </label>
 
-      <div class="button-row">
-        <button id="generateBtn">Generate Blueprint</button>
-        <button id="downloadSvgBtn" class="secondary">Download SVG</button>
-        <button id="printBtn" class="secondary">Print / Save PDF</button>
+      <div class="button-group">
+        <button id="generateBtn" class="btn btn-primary" type="button">Generate Blueprint</button>
+        <button id="exportBtn" class="btn btn-secondary" type="button">Export SVG</button>
+        <button id="printBtn" class="btn btn-secondary" type="button">Print / Save PDF</button>
+        <button id="resetBtn" class="btn btn-ghost" type="button">Reset</button>
       </div>
+    </section>
 
-      <div class="status" id="status">Load a DXF file to begin.</div>
-
-      <details class="help">
-        <summary>What this app supports</summary>
-        <ul>
-          <li>LINE</li>
-          <li>CIRCLE</li>
-          <li>ARC</li>
-          <li>LWPOLYLINE</li>
-          <li>POLYLINE / VERTEX</li>
-        </ul>
-        <p>Best results come from clean 2D DXF files.</p>
-      </details>
-    </aside>
-
-    <main class="panel preview-panel">
-      <div class="preview-toolbar">
-        <strong>Blueprint Preview</strong>
-        <span id="geometrySummary">No drawing loaded</span>
+    <section class="card preview-card">
+      <div class="preview-head">
+        <h2>Drawing Previews</h2>
+        <p id="fileMeta">No DXF loaded</p>
       </div>
-      <div class="preview-wrap" id="previewWrap">
-        <div class="empty-state">Your blueprint preview will appear here.</div>
+      <div class="preview-grid">
+        <article class="preview-pane">
+          <h3>Original Drawing</h3>
+          <div id="rawPreview" class="preview-box empty">Upload or load sample to see source geometry.</div>
+        </article>
+        <article class="preview-pane printable-area">
+          <h3>Generated Blueprint Sheet</h3>
+          <div id="blueprintPreview" class="preview-box empty">Generate blueprint to preview printable sheet.</div>
+        </article>
       </div>
-    </main>
-  </div>
+    </section>
+  </main>
 
+  <footer class="app-footer">
+    <span>BlueprintCaddy MVP | Front-end only static app</span>
+    <span>Concept / field-use layout. Not certified fabrication engineering.</span>
+  </footer>
+
+  <script src="lib/dxf-parser.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

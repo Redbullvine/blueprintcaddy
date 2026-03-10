@@ -1,439 +1,811 @@
 const state = {
-  fileName: '',
+  fileName: "",
+  sourceText: "",
   entities: [],
   bounds: null,
-  sourceSvg: '',
-  blueprintSvg: ''
+  unsupported: [],
+  rawSvg: "",
+  blueprintSvg: ""
 };
 
-const els = {
-  dxfFile: document.getElementById('dxfFile'),
-  dropZone: document.getElementById('dropZone'),
-  fileLabel: document.getElementById('fileLabel'),
-  drawingTitle: document.getElementById('drawingTitle'),
-  units: document.getElementById('units'),
-  realWidth: document.getElementById('realWidth'),
-  realHeight: document.getElementById('realHeight'),
-  projectName: document.getElementById('projectName'),
-  drawingNumber: document.getElementById('drawingNumber'),
-  revision: document.getElementById('revision'),
-  drawnBy: document.getElementById('drawnBy'),
-  notes: document.getElementById('notes'),
-  generateBtn: document.getElementById('generateBtn'),
-  downloadSvgBtn: document.getElementById('downloadSvgBtn'),
-  printBtn: document.getElementById('printBtn'),
-  status: document.getElementById('status'),
-  previewWrap: document.getElementById('previewWrap'),
-  geometrySummary: document.getElementById('geometrySummary')
+const PAGE_PRESETS = {
+  letter: { widthIn: 11, heightIn: 8.5 },
+  tabloid: { widthIn: 17, heightIn: 11 }
 };
 
-function setStatus(message, isError = false) {
-  els.status.textContent = message;
-  els.status.style.color = isError ? '#fca5a5' : '#cbd5e1';
+const controls = {
+  dxfFile: document.getElementById("dxfFile"),
+  dropInput: document.getElementById("dxfDropInput"),
+  dropZone: document.getElementById("dropZone"),
+  dropLabel: document.getElementById("dropLabel"),
+  messageBanner: document.getElementById("messageBanner"),
+  unsupportedPanel: document.getElementById("unsupportedPanel"),
+  unsupportedList: document.getElementById("unsupportedList"),
+  drawingTitle: document.getElementById("drawingTitle"),
+  projectName: document.getElementById("projectName"),
+  actualWidth: document.getElementById("actualWidth"),
+  actualHeight: document.getElementById("actualHeight"),
+  units: document.getElementById("units"),
+  pagePreset: document.getElementById("pagePreset"),
+  orientation: document.getElementById("orientation"),
+  revision: document.getElementById("revision"),
+  notes: document.getElementById("notes"),
+  generateBtn: document.getElementById("generateBtn"),
+  exportBtn: document.getElementById("exportBtn"),
+  printBtn: document.getElementById("printBtn"),
+  resetBtn: document.getElementById("resetBtn"),
+  loadSampleBtn: document.getElementById("loadSampleBtn"),
+  rawPreview: document.getElementById("rawPreview"),
+  blueprintPreview: document.getElementById("blueprintPreview"),
+  fileMeta: document.getElementById("fileMeta")
+};
+
+function setMessage(text, isError) {
+  controls.messageBanner.textContent = text;
+  controls.messageBanner.classList.toggle("error", Boolean(isError));
+}
+
+function escapeXml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatNumber(value, digits = 2) {
+  return Number(value).toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+}
+
+function truncateText(value, maxChars) {
+  const text = String(value || "");
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars < 6) {
+    return text.slice(0, maxChars);
+  }
+  const head = Math.ceil((maxChars - 1) / 2);
+  const tail = Math.floor((maxChars - 1) / 2);
+  return `${text.slice(0, head)}\u2026${text.slice(text.length - tail)}`;
+}
+
+function todayStamp() {
+  const now = new Date();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const yyyy = String(now.getFullYear());
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function toRadians(deg) {
+  return (deg * Math.PI) / 180;
+}
+
+function mapPageSize() {
+  const presetValue = controls.pagePreset.value;
+  const [sheet, presetOrientation] = presetValue.split("-");
+  const orientation = controls.orientation.value || presetOrientation || "landscape";
+  const base = PAGE_PRESETS[sheet] || PAGE_PRESETS.letter;
+
+  const widthIn = orientation === "portrait" ? Math.min(base.widthIn, base.heightIn) : Math.max(base.widthIn, base.heightIn);
+  const heightIn = orientation === "portrait" ? Math.max(base.widthIn, base.heightIn) : Math.min(base.widthIn, base.heightIn);
+
+  return {
+    widthIn,
+    heightIn,
+    name: `${sheet === "tabloid" ? "Tabloid" : "Letter"} ${orientation}`
+  };
+}
+
+function renderUnsupported(unsupported) {
+  if (!unsupported.length) {
+    controls.unsupportedPanel.hidden = true;
+    controls.unsupportedList.innerHTML = "";
+    return;
+  }
+
+  controls.unsupportedPanel.hidden = false;
+  controls.unsupportedList.innerHTML = unsupported
+    .map((item) => `<li>${escapeXml(item.type)} (${item.count})</li>`)
+    .join("");
+}
+
+function renderSourceSvg(entities, bounds) {
+  const width = 900;
+  const height = 640;
+  const margin = 40;
+  const drawWidth = width - margin * 2;
+  const drawHeight = height - margin * 2;
+
+  const sourceWidth = Math.max(0.0001, bounds.maxX - bounds.minX);
+  const sourceHeight = Math.max(0.0001, bounds.maxY - bounds.minY);
+  const scale = Math.min(drawWidth / sourceWidth, drawHeight / sourceHeight);
+  const offsetX = margin + (drawWidth - sourceWidth * scale) / 2;
+  const offsetY = margin + (drawHeight - sourceHeight * scale) / 2;
+
+  const tx = (x) => offsetX + (x - bounds.minX) * scale;
+  const ty = (y) => height - (offsetY + (y - bounds.minY) * scale);
+
+  const lines = entities.map((entity) => entityToSvg(entity, tx, ty, scale, "#0f2d4f", 1.4)).join("");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <rect width="100%" height="100%" fill="#ffffff" />
+    <rect x="${margin}" y="${margin}" width="${drawWidth}" height="${drawHeight}" fill="#fcfdff" stroke="#bdc9d8" stroke-width="1.2" />
+    ${lines}
+  </svg>`;
+}
+
+function entityToSvg(entity, tx, ty, scale, stroke, strokeWidth) {
+  if (entity.type === "LINE") {
+    return `<line x1="${tx(entity.x1)}" y1="${ty(entity.y1)}" x2="${tx(entity.x2)}" y2="${ty(entity.y2)}" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+  }
+
+  if (entity.type === "POLYLINE") {
+    const points = entity.points.map((point) => `${tx(point.x)},${ty(point.y)}`).join(" ");
+    let svg = `<polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+    if (entity.closed && entity.points.length > 2) {
+      const start = entity.points[0];
+      const end = entity.points[entity.points.length - 1];
+      svg += `<line x1="${tx(end.x)}" y1="${ty(end.y)}" x2="${tx(start.x)}" y2="${ty(start.y)}" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+    }
+    return svg;
+  }
+
+  if (entity.type === "CIRCLE") {
+    return `<circle cx="${tx(entity.cx)}" cy="${ty(entity.cy)}" r="${entity.r * scale}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+  }
+
+  if (entity.type === "ARC") {
+    const startX = tx(entity.cx + Math.cos(toRadians(entity.startAngle)) * entity.r);
+    const startY = ty(entity.cy + Math.sin(toRadians(entity.startAngle)) * entity.r);
+    const endX = tx(entity.cx + Math.cos(toRadians(entity.endAngle)) * entity.r);
+    const endY = ty(entity.cy + Math.sin(toRadians(entity.endAngle)) * entity.r);
+
+    let delta = entity.endAngle - entity.startAngle;
+    while (delta < 0) delta += 360;
+    const largeArc = delta > 180 ? 1 : 0;
+
+    return `<path d="M ${startX} ${startY} A ${entity.r * scale} ${entity.r * scale} 0 ${largeArc} 1 ${endX} ${endY}" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" />`;
+  }
+
+  return "";
+}
+
+function parseUpload(text, fileName) {
+  try {
+    const parsed = window.DxfParserLite.parseDXF(text);
+    if (!parsed.entities.length || !parsed.bounds) {
+      throw new Error("No supported geometry found. Supported: LINE, LWPOLYLINE, POLYLINE, CIRCLE, ARC.");
+    }
+
+    state.fileName = fileName;
+    state.sourceText = text;
+    state.entities = parsed.entities;
+    state.bounds = parsed.bounds;
+    state.unsupported = parsed.unsupported;
+    state.rawSvg = renderSourceSvg(parsed.entities, parsed.bounds);
+
+    controls.rawPreview.classList.remove("empty");
+    controls.rawPreview.innerHTML = state.rawSvg;
+
+    const rawWidth = parsed.bounds.maxX - parsed.bounds.minX;
+    const rawHeight = parsed.bounds.maxY - parsed.bounds.minY;
+    controls.fileMeta.textContent = `${fileName} | ${parsed.entities.length} supported entities | Source bounds ${formatNumber(rawWidth)} x ${formatNumber(rawHeight)}`;
+    controls.dropLabel.textContent = `Loaded: ${fileName}`;
+
+    renderUnsupported(parsed.unsupported);
+    setMessage("DXF loaded. Enter actual dimensions and click Generate Blueprint.", false);
+  } catch (error) {
+    console.error(error);
+    setMessage(`Invalid DXF: ${error.message}`, true);
+  }
 }
 
 function readFile(file) {
-  state.fileName = file.name;
-  els.fileLabel.textContent = file.name;
+  if (!file) {
+    setMessage("No file selected. Upload a DXF file to continue.", true);
+    return;
+  }
+
+  if (!/\.dxf$/i.test(file.name)) {
+    setMessage("Only .dxf files are supported for this MVP.", true);
+    return;
+  }
+
   const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const text = String(reader.result || '');
-      const parsed = parseDXF(text);
-      state.entities = parsed.entities;
-      state.bounds = parsed.bounds;
-      if (!state.entities.length || !state.bounds) {
-        throw new Error('No supported 2D geometry found in this DXF.');
-      }
-      const w = (state.bounds.maxX - state.bounds.minX) || 1;
-      const h = (state.bounds.maxY - state.bounds.minY) || 1;
-      els.geometrySummary.textContent = `${state.entities.length} entities • source size ${formatNum(w)} × ${formatNum(h)}`;
-      setStatus('DXF loaded. Click Generate Blueprint.');
-      generateBlueprint();
-    } catch (err) {
-      console.error(err);
-      setStatus(err.message || 'Failed to parse DXF.', true);
-    }
-  };
+  reader.onload = () => parseUpload(String(reader.result || ""), file.name);
+  reader.onerror = () => setMessage("Could not read file. Try another DXF.", true);
   reader.readAsText(file);
 }
 
-function formatNum(value) {
-  return Number(value).toFixed(2).replace(/\.00$/, '');
-}
-
-function groupPairs(text) {
-  const lines = text.replace(/\r/g, '').split('\n');
-  const pairs = [];
-  for (let i = 0; i < lines.length; i += 2) {
-    pairs.push({ code: (lines[i] || '').trim(), value: (lines[i + 1] || '').trim() });
-  }
-  return pairs;
-}
-
-function parseDXF(text) {
-  const pairs = groupPairs(text);
-  const entities = [];
-  let i = 0;
-
-  const pushEntity = (entity) => {
-    if (!entity) return;
-    entities.push(entity);
+function normalizeBounds(minX, minY, maxX, maxY) {
+  return {
+    minX: Math.min(minX, maxX),
+    minY: Math.min(minY, maxY),
+    maxX: Math.max(minX, maxX),
+    maxY: Math.max(minY, maxY)
   };
-
-  while (i < pairs.length) {
-    const p = pairs[i];
-    if (p.code === '0') {
-      const type = p.value.toUpperCase();
-      if (type === 'LINE') {
-        let x1, y1, x2, y2;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const v = parseFloat(pairs[i].value);
-          if (c === '10') x1 = v;
-          if (c === '20') y1 = v;
-          if (c === '11') x2 = v;
-          if (c === '21') y2 = v;
-          i++;
-        }
-        pushEntity((isFinite(x1) && isFinite(y1) && isFinite(x2) && isFinite(y2)) ? { type: 'LINE', x1, y1, x2, y2 } : null);
-        continue;
-      }
-      if (type === 'CIRCLE') {
-        let cx, cy, r;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const v = parseFloat(pairs[i].value);
-          if (c === '10') cx = v;
-          if (c === '20') cy = v;
-          if (c === '40') r = v;
-          i++;
-        }
-        pushEntity((isFinite(cx) && isFinite(cy) && isFinite(r)) ? { type: 'CIRCLE', cx, cy, r } : null);
-        continue;
-      }
-      if (type === 'ARC') {
-        let cx, cy, r, startAngle, endAngle;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const v = parseFloat(pairs[i].value);
-          if (c === '10') cx = v;
-          if (c === '20') cy = v;
-          if (c === '40') r = v;
-          if (c === '50') startAngle = v;
-          if (c === '51') endAngle = v;
-          i++;
-        }
-        pushEntity((isFinite(cx) && isFinite(cy) && isFinite(r) && isFinite(startAngle) && isFinite(endAngle))
-          ? { type: 'ARC', cx, cy, r, startAngle, endAngle }
-          : null);
-        continue;
-      }
-      if (type === 'LWPOLYLINE') {
-        let points = [];
-        let closed = false;
-        let pendingX = null;
-        i++;
-        while (i < pairs.length && pairs[i].code !== '0') {
-          const c = pairs[i].code;
-          const raw = pairs[i].value;
-          if (c === '10') pendingX = parseFloat(raw);
-          if (c === '20' && pendingX !== null) {
-            points.push({ x: pendingX, y: parseFloat(raw) });
-            pendingX = null;
-          }
-          if (c === '70') {
-            const flag = parseInt(raw, 10);
-            closed = (flag & 1) === 1;
-          }
-          i++;
-        }
-        if (points.length > 1) pushEntity({ type: 'POLYLINE', points, closed });
-        continue;
-      }
-      if (type === 'POLYLINE') {
-        let points = [];
-        let closed = false;
-        i++;
-        while (i < pairs.length) {
-          const current = pairs[i];
-          if (current.code === '0' && current.value.toUpperCase() === 'SEQEND') {
-            i++;
-            break;
-          }
-          if (current.code === '70') {
-            const flag = parseInt(current.value, 10);
-            closed = (flag & 1) === 1;
-          }
-          if (current.code === '0' && current.value.toUpperCase() === 'VERTEX') {
-            let x, y;
-            i++;
-            while (i < pairs.length && !(pairs[i].code === '0' && ['VERTEX', 'SEQEND'].includes(pairs[i].value.toUpperCase()))) {
-              if (pairs[i].code === '10') x = parseFloat(pairs[i].value);
-              if (pairs[i].code === '20') y = parseFloat(pairs[i].value);
-              i++;
-            }
-            if (isFinite(x) && isFinite(y)) points.push({ x, y });
-            continue;
-          }
-          i++;
-        }
-        if (points.length > 1) pushEntity({ type: 'POLYLINE', points, closed });
-        continue;
-      }
-    }
-    i++;
-  }
-
-  const bounds = computeBounds(entities);
-  return { entities, bounds };
 }
 
-function computeBounds(entities) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const include = (x, y) => {
-    if (!isFinite(x) || !isFinite(y)) return;
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-  };
+function boxesIntersect(a, b, padding = 0) {
+  return !(
+    a.maxX + padding < b.minX ||
+    a.minX - padding > b.maxX ||
+    a.maxY + padding < b.minY ||
+    a.minY - padding > b.maxY
+  );
+}
 
-  for (const e of entities) {
-    if (e.type === 'LINE') {
-      include(e.x1, e.y1); include(e.x2, e.y2);
-    } else if (e.type === 'CIRCLE' || e.type === 'ARC') {
-      include(e.cx - e.r, e.cy - e.r);
-      include(e.cx + e.r, e.cy + e.r);
-    } else if (e.type === 'POLYLINE') {
-      e.points.forEach(p => include(p.x, p.y));
-    }
+function estimateTextBox(centerX, centerY, text, rotate) {
+  const textWidth = Math.max(18, text.length * 6.6 + 8);
+  if (!rotate) {
+    return normalizeBounds(centerX - textWidth / 2, centerY - 11, centerX + textWidth / 2, centerY + 3);
   }
+  return normalizeBounds(centerX - 7, centerY - textWidth / 2, centerX + 7, centerY + textWidth / 2);
+}
 
-  if (!isFinite(minX)) return null;
+function isClear(box, blockers) {
+  return blockers.every((block) => !boxesIntersect(box, block, 2));
+}
+
+function polylineBounds(points) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  points.forEach((p) => {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  });
   return { minX, minY, maxX, maxY };
 }
 
-function esc(text) {
-  return String(text ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+function toFeatureBounds(rawBounds, tx, ty) {
+  return normalizeBounds(tx(rawBounds.minX), ty(rawBounds.maxY), tx(rawBounds.maxX), ty(rawBounds.minY));
 }
 
-function degToRad(d) { return d * Math.PI / 180; }
+function detectRectangles(entities) {
+  const tolerance = 1e-4;
+  const rectangles = [];
 
-function svgArcPath(cx, cy, r, startAngle, endAngle, tx, ty, scale) {
-  const sx = tx(cx + Math.cos(degToRad(startAngle)) * r);
-  const sy = ty(cy + Math.sin(degToRad(startAngle)) * r);
-  const ex = tx(cx + Math.cos(degToRad(endAngle)) * r);
-  const ey = ty(cy + Math.sin(degToRad(endAngle)) * r);
-  let delta = endAngle - startAngle;
-  if (delta < 0) delta += 360;
-  const largeArc = delta > 180 ? 1 : 0;
-  return `M ${sx} ${sy} A ${r * scale} ${r * scale} 0 ${largeArc} 1 ${ex} ${ey}`;
-}
+  entities.forEach((entity) => {
+    if (entity.type !== "POLYLINE" || !entity.closed || !Array.isArray(entity.points) || entity.points.length < 4) {
+      return;
+    }
 
-function renderGeometrySvg(entities, bounds, originX, originY, drawW, drawH) {
-  const srcW = Math.max(0.0001, bounds.maxX - bounds.minX);
-  const srcH = Math.max(0.0001, bounds.maxY - bounds.minY);
-  const scale = Math.min(drawW / srcW, drawH / srcH);
-  const offsetX = originX + (drawW - srcW * scale) / 2;
-  const offsetY = originY + (drawH - srcH * scale) / 2;
+    const points = [];
+    entity.points.forEach((point) => {
+      const prev = points[points.length - 1];
+      if (!prev || Math.abs(prev.x - point.x) > tolerance || Math.abs(prev.y - point.y) > tolerance) {
+        points.push({ x: point.x, y: point.y });
+      }
+    });
 
-  const tx = x => offsetX + (x - bounds.minX) * scale;
-  const ty = y => originY + drawH - ((y - bounds.minY) * scale + (drawH - srcH * scale) / 2);
-
-  let out = '';
-  for (const e of entities) {
-    if (e.type === 'LINE') {
-      out += `<line x1="${tx(e.x1)}" y1="${ty(e.y1)}" x2="${tx(e.x2)}" y2="${ty(e.y2)}" stroke="#111" stroke-width="1.2" />`;
-    } else if (e.type === 'CIRCLE') {
-      out += `<circle cx="${tx(e.cx)}" cy="${ty(e.cy)}" r="${e.r * scale}" fill="none" stroke="#111" stroke-width="1.2" />`;
-    } else if (e.type === 'ARC') {
-      out += `<path d="${svgArcPath(e.cx, e.cy, e.r, e.startAngle, e.endAngle, tx, ty, scale)}" fill="none" stroke="#111" stroke-width="1.2" />`;
-    } else if (e.type === 'POLYLINE') {
-      const points = e.points.map(p => `${tx(p.x)},${ty(p.y)}`).join(' ');
-      out += `<polyline points="${points}" fill="none" stroke="#111" stroke-width="1.2" ${e.closed ? 'stroke-linejoin="round"' : ''} />`;
-      if (e.closed && e.points.length > 2) {
-        out += `<line x1="${tx(e.points[e.points.length - 1].x)}" y1="${ty(e.points[e.points.length - 1].y)}" x2="${tx(e.points[0].x)}" y2="${ty(e.points[0].y)}" stroke="#111" stroke-width="1.2" />`;
+    if (points.length > 1) {
+      const first = points[0];
+      const last = points[points.length - 1];
+      if (Math.abs(first.x - last.x) < tolerance && Math.abs(first.y - last.y) < tolerance) {
+        points.pop();
       }
     }
+
+    if (points.length !== 4) {
+      return;
+    }
+
+    const box = polylineBounds(points);
+    const width = box.maxX - box.minX;
+    const height = box.maxY - box.minY;
+    if (width <= tolerance || height <= tolerance) {
+      return;
+    }
+
+    const corners = new Set();
+    for (const point of points) {
+      const onXEdge = Math.abs(point.x - box.minX) < tolerance || Math.abs(point.x - box.maxX) < tolerance;
+      const onYEdge = Math.abs(point.y - box.minY) < tolerance || Math.abs(point.y - box.maxY) < tolerance;
+      if (!onXEdge || !onYEdge) {
+        return;
+      }
+      const xBit = Math.abs(point.x - box.minX) < tolerance ? "0" : "1";
+      const yBit = Math.abs(point.y - box.minY) < tolerance ? "0" : "1";
+      corners.add(`${xBit}${yBit}`);
+    }
+
+    if (corners.size === 4) {
+      rectangles.push({
+        rawBounds: box,
+        rawWidth: width,
+        rawHeight: height
+      });
+    }
+  });
+
+  return rectangles;
+}
+
+function detectCircles(entities) {
+  return entities
+    .filter((entity) => entity.type === "CIRCLE" && Number.isFinite(entity.r) && entity.r > 0)
+    .map((circle) => ({
+      cx: circle.cx,
+      cy: circle.cy,
+      r: circle.r,
+      rawDiameter: circle.r * 2
+    }));
+}
+
+function renderArrowTriangle(x, y, axis, direction, size) {
+  if (axis === "x") {
+    const tipX = x + size * direction;
+    return `<polygon points="${x},${y} ${tipX},${y - size * 0.62} ${tipX},${y + size * 0.62}" fill="#111" />`;
   }
-  return out;
+  const tipY = y + size * direction;
+  return `<polygon points="${x},${y} ${x - size * 0.62},${tipY} ${x + size * 0.62},${tipY}" fill="#111" />`;
 }
 
-function renderDimensionLine(x1, y1, x2, y2, text, rotate = false) {
-  const markerA = rotate
-    ? `<line x1="${x1}" y1="${y1}" x2="${x1}" y2="${y1 + 12}" stroke="#111" stroke-width="1" />
-       <line x1="${x2}" y1="${y2}" x2="${x2}" y2="${y2 - 12}" stroke="#111" stroke-width="1" />`
-    : `<line x1="${x1}" y1="${y1}" x2="${x1 + 12}" y2="${y1}" stroke="#111" stroke-width="1" />
-       <line x1="${x2}" y1="${y2}" x2="${x2 - 12}" y2="${y2}" stroke="#111" stroke-width="1" />`;
-  const tx = rotate ? x1 - 12 : (x1 + x2) / 2;
-  const ty = rotate ? (y1 + y2) / 2 : y1 - 6;
-  return `
-    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#111" stroke-width="1" />
-    ${markerA}
-    <text x="${tx}" y="${ty}" font-size="14" text-anchor="middle" ${rotate ? `transform="rotate(-90 ${tx} ${ty})"` : ''}>${esc(text)}</text>`;
+function renderHorizontalDimension(spec, occupied, blockers) {
+  const { x1, x2, refY, candidateYs, text } = spec;
+  for (const lineY of candidateYs) {
+    const textYOptions = [lineY - 6, lineY + 15];
+    for (const textY of textYOptions) {
+      const box = estimateTextBox((x1 + x2) / 2, textY, text, false);
+      if (!isClear(box, blockers.concat(occupied))) {
+        continue;
+      }
+      occupied.push(box);
+      const arrowSize = 5;
+      return `
+        <line x1="${x1}" y1="${refY}" x2="${x1}" y2="${lineY}" stroke="#111" stroke-width="0.9" />
+        <line x1="${x2}" y1="${refY}" x2="${x2}" y2="${lineY}" stroke="#111" stroke-width="0.9" />
+        <line x1="${x1}" y1="${lineY}" x2="${x2}" y2="${lineY}" stroke="#111" stroke-width="0.9" />
+        ${renderArrowTriangle(x1, lineY, "x", 1, arrowSize)}
+        ${renderArrowTriangle(x2, lineY, "x", -1, arrowSize)}
+        <text x="${(x1 + x2) / 2}" y="${textY}" font-size="11" text-anchor="middle" font-family="Arial">${escapeXml(text)}</text>
+      `;
+    }
+  }
+  return "";
 }
 
-function generateBlueprint() {
+function renderVerticalDimension(spec, occupied, blockers) {
+  const { y1, y2, refX, candidateXs, text } = spec;
+  for (const lineX of candidateXs) {
+    const textXOptions = [lineX - 8, lineX + 8];
+    for (const textX of textXOptions) {
+      const centerY = (y1 + y2) / 2;
+      const box = estimateTextBox(textX, centerY, text, true);
+      if (!isClear(box, blockers.concat(occupied))) {
+        continue;
+      }
+      occupied.push(box);
+      const arrowSize = 5;
+      return `
+        <line x1="${refX}" y1="${y1}" x2="${lineX}" y2="${y1}" stroke="#111" stroke-width="0.9" />
+        <line x1="${refX}" y1="${y2}" x2="${lineX}" y2="${y2}" stroke="#111" stroke-width="0.9" />
+        <line x1="${lineX}" y1="${y1}" x2="${lineX}" y2="${y2}" stroke="#111" stroke-width="0.9" />
+        ${renderArrowTriangle(lineX, y1, "y", 1, arrowSize)}
+        ${renderArrowTriangle(lineX, y2, "y", -1, arrowSize)}
+        <text x="${textX}" y="${centerY}" font-size="11" text-anchor="middle" font-family="Arial" transform="rotate(-90 ${textX} ${centerY})">${escapeXml(text)}</text>
+      `;
+    }
+  }
+  return "";
+}
+
+function renderCircleDiameterNote(spec, occupied, blockers) {
+  const { cx, cy, r, text, drawingZone } = spec;
+  const gap = 14;
+  const positions = [
+    { x: cx + r + gap, y: cy - r - 6, anchor: "start", leadX: cx + r, leadY: cy },
+    { x: cx + r + gap, y: cy + r + 14, anchor: "start", leadX: cx + r * 0.7, leadY: cy + r * 0.7 },
+    { x: cx - r - gap, y: cy - r - 6, anchor: "end", leadX: cx - r, leadY: cy },
+    { x: cx - r - gap, y: cy + r + 14, anchor: "end", leadX: cx - r * 0.7, leadY: cy + r * 0.7 }
+  ];
+
+  for (const pos of positions) {
+    const width = Math.max(18, text.length * 6.6 + 8);
+    const box = pos.anchor === "end"
+      ? normalizeBounds(pos.x - width, pos.y - 11, pos.x, pos.y + 3)
+      : normalizeBounds(pos.x, pos.y - 11, pos.x + width, pos.y + 3);
+
+    const insideDrawing = box.minX > drawingZone.minX + 4 && box.maxX < drawingZone.maxX - 4 && box.minY > drawingZone.minY + 4 && box.maxY < drawingZone.maxY - 4;
+    if (!insideDrawing || !isClear(box, blockers.concat(occupied))) {
+      continue;
+    }
+
+    occupied.push(box);
+
+    const textX = pos.x;
+    const textY = pos.y;
+    const textEndX = pos.anchor === "end" ? pos.x - 2 : pos.x + 2;
+    const textEndY = pos.y - 4;
+
+    return `
+      <line x1="${pos.leadX}" y1="${pos.leadY}" x2="${textEndX}" y2="${textEndY}" stroke="#111" stroke-width="0.9" />
+      <circle cx="${pos.leadX}" cy="${pos.leadY}" r="1.5" fill="#111" />
+      <text x="${textX}" y="${textY}" font-size="11" text-anchor="${pos.anchor}" font-family="Arial">${escapeXml(text)}</text>
+    `;
+  }
+
+  return "";
+}
+
+function buildAutoDimensions(config) {
+  const {
+    entities,
+    srcBounds,
+    units,
+    actualWidth,
+    actualHeight,
+    tx,
+    ty,
+    drawingZone,
+    titleBlockRect
+  } = config;
+
+  const srcWidth = Math.max(0.0001, srcBounds.maxX - srcBounds.minX);
+  const srcHeight = Math.max(0.0001, srcBounds.maxY - srcBounds.minY);
+  const xUnitPerDxf = actualWidth / srcWidth;
+  const yUnitPerDxf = actualHeight / srcHeight;
+  const avgUnitPerDxf = (xUnitPerDxf + yUnitPerDxf) / 2;
+
+  const geometryBox = toFeatureBounds(srcBounds, tx, ty);
+  const occupied = [];
+  const fixedBlockers = [titleBlockRect];
+
+  const rectangles = detectRectangles(entities).slice(0, 18);
+  const circles = detectCircles(entities).slice(0, 24);
+
+  const featureShapeBoxes = [];
+  rectangles.forEach((rect) => {
+    featureShapeBoxes.push(toFeatureBounds(rect.rawBounds, tx, ty));
+  });
+  circles.forEach((circle) => {
+    featureShapeBoxes.push(normalizeBounds(tx(circle.cx - circle.r), ty(circle.cy + circle.r), tx(circle.cx + circle.r), ty(circle.cy - circle.r)));
+  });
+
+  const fragments = [];
+
+  const overallWidthText = `${formatNumber(actualWidth)} ${units}`;
+  const overallHeightText = `${formatNumber(actualHeight)} ${units}`;
+
+  const overallWidthCandidates = [geometryBox.maxY + 24, geometryBox.maxY + 38, geometryBox.maxY + 52]
+    .filter((y) => y < titleBlockRect.minY - 8 && y < drawingZone.maxY - 4);
+  const overallHeightCandidates = [geometryBox.minX - 24, geometryBox.minX - 38, geometryBox.minX - 52]
+    .filter((x) => x > drawingZone.minX + 4);
+
+  fragments.push(renderHorizontalDimension({
+    x1: geometryBox.minX,
+    x2: geometryBox.maxX,
+    refY: geometryBox.maxY,
+    candidateYs: overallWidthCandidates,
+    text: overallWidthText
+  }, occupied, fixedBlockers.concat(featureShapeBoxes)));
+
+  fragments.push(renderVerticalDimension({
+    y1: geometryBox.minY,
+    y2: geometryBox.maxY,
+    refX: geometryBox.minX,
+    candidateXs: overallHeightCandidates,
+    text: overallHeightText
+  }, occupied, fixedBlockers.concat(featureShapeBoxes)));
+
+  rectangles.forEach((rect) => {
+    const mapped = toFeatureBounds(rect.rawBounds, tx, ty);
+    const blockers = fixedBlockers.concat(featureShapeBoxes.filter((box) => box !== mapped));
+
+    const widthText = `${formatNumber(rect.rawWidth * xUnitPerDxf)} ${units}`;
+    const widthCandidates = [mapped.minY - 14, mapped.maxY + 14, mapped.minY - 28, mapped.maxY + 28]
+      .filter((y) => y > drawingZone.minY + 6 && y < titleBlockRect.minY - 8);
+
+    const heightText = `${formatNumber(rect.rawHeight * yUnitPerDxf)} ${units}`;
+    const heightCandidates = [mapped.maxX + 14, mapped.minX - 14, mapped.maxX + 28, mapped.minX - 28]
+      .filter((x) => x > drawingZone.minX + 6 && x < drawingZone.maxX - 6);
+
+    fragments.push(renderHorizontalDimension({
+      x1: mapped.minX,
+      x2: mapped.maxX,
+      refY: mapped.minY,
+      candidateYs: widthCandidates,
+      text: widthText
+    }, occupied, blockers));
+
+    fragments.push(renderVerticalDimension({
+      y1: mapped.minY,
+      y2: mapped.maxY,
+      refX: mapped.maxX,
+      candidateXs: heightCandidates,
+      text: heightText
+    }, occupied, blockers));
+  });
+
+  circles.forEach((circle) => {
+    const cx = tx(circle.cx);
+    const cy = ty(circle.cy);
+    const r = Math.max(2, Math.abs(tx(circle.cx + circle.r) - tx(circle.cx)));
+    const text = `\u00D8${formatNumber(circle.rawDiameter * avgUnitPerDxf)} ${units}`;
+
+    fragments.push(renderCircleDiameterNote({
+      cx,
+      cy,
+      r,
+      text,
+      drawingZone
+    }, occupied, fixedBlockers.concat(featureShapeBoxes)));
+  });
+
+  return fragments.join("\n");
+}
+
+function createBlueprintSvg() {
   if (!state.entities.length || !state.bounds) {
-    setStatus('Load a DXF file first.', true);
-    return;
+    setMessage("Load a DXF before generating a blueprint.", true);
+    return null;
   }
 
-  const title = els.drawingTitle.value.trim() || 'Blueprint Drawing';
-  const project = els.projectName.value.trim() || 'Project';
-  const units = els.units.value;
-  const realWidth = parseFloat(els.realWidth.value);
-  const realHeight = parseFloat(els.realHeight.value);
-  const drawingNumber = els.drawingNumber.value.trim() || 'A-001';
-  const revision = els.revision.value.trim() || '0';
-  const drawnBy = els.drawnBy.value.trim() || 'Unknown';
-  const notes = els.notes.value.trim();
+  const widthValue = parseFloat(controls.actualWidth.value);
+  const heightValue = parseFloat(controls.actualHeight.value);
 
-  if (!(realWidth > 0) || !(realHeight > 0)) {
-    setStatus('Enter positive real width and height values.', true);
-    return;
+  if (!Number.isFinite(widthValue) || !Number.isFinite(heightValue)) {
+    setMessage("Enter both actual width and actual height.", true);
+    return null;
   }
 
-  const pageW = 1400;
-  const pageH = 990;
-  const margin = 40;
-  const titleBlockH = 150;
-  const drawX = 110;
-  const drawY = 80;
-  const drawW = pageW - 220;
-  const drawH = pageH - titleBlockH - 150;
-  const today = new Date().toISOString().slice(0, 10);
+  if (widthValue <= 0 || heightValue <= 0) {
+    setMessage("Actual dimensions must be greater than zero.", true);
+    return null;
+  }
 
-  const sourceW = Math.max(0.0001, state.bounds.maxX - state.bounds.minX);
-  const sourceH = Math.max(0.0001, state.bounds.maxY - state.bounds.minY);
-  const xScale = realWidth / sourceW;
-  const yScale = realHeight / sourceH;
-  const scaleNote = `Scaled to ${formatNum(realWidth)} ${units} × ${formatNum(realHeight)} ${units}`;
+  const units = controls.units.value;
+  const title = controls.drawingTitle.value.trim() || "Untitled Drawing";
+  const project = controls.projectName.value.trim() || "Project not specified";
+  const notes = controls.notes.value.trim() || "No notes provided.";
+  const revision = controls.revision.value.trim() || "Rev A";
+  const page = mapPageSize();
 
-  const geometry = renderGeometrySvg(state.entities, state.bounds, drawX, drawY, drawW, drawH);
+  const pxPerIn = 96;
+  const pageWidth = page.widthIn * pxPerIn;
+  const pageHeight = page.heightIn * pxPerIn;
 
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="${pageW}" height="${pageH}" viewBox="0 0 ${pageW} ${pageH}">
-    <defs>
-      <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e5e7eb" stroke-width="1"/>
-      </pattern>
-    </defs>
-    <rect width="100%" height="100%" fill="#fff" />
-    <rect x="${margin}" y="${margin}" width="${pageW - margin * 2}" height="${pageH - margin * 2}" fill="none" stroke="#111" stroke-width="2" />
-    <rect x="${drawX}" y="${drawY}" width="${drawW}" height="${drawH}" fill="url(#grid)" stroke="#111" stroke-width="1.5" />
+  const margin = 32;
+  const headerBandHeight = 48;
+  const titleBlockHeight = 150;
+  const drawingX = margin + 10;
+  const drawingY = margin + headerBandHeight;
+  const drawingWidth = pageWidth - margin * 2 - 20;
+  const drawingHeight = pageHeight - margin - drawingY - titleBlockHeight - 16;
 
-    <text x="${margin + 10}" y="${margin - 12 + 30}" font-family="Arial" font-size="30" font-weight="700">${esc(title)}</text>
-    <text x="${pageW - margin - 10}" y="${margin - 12 + 30}" font-family="Arial" font-size="14" text-anchor="end">DXF Blueprint Generator</text>
+  const srcWidth = Math.max(0.0001, state.bounds.maxX - state.bounds.minX);
+  const srcHeight = Math.max(0.0001, state.bounds.maxY - state.bounds.minY);
 
-    ${geometry}
+  const uniformScale = Math.min(widthValue / srcWidth, heightValue / srcHeight);
+  const scaledWidth = srcWidth * uniformScale;
+  const scaledHeight = srcHeight * uniformScale;
 
-    ${renderDimensionLine(drawX, drawY + drawH + 36, drawX + drawW, drawY + drawH + 36, `${formatNum(realWidth)} ${units}`)}
-    ${renderDimensionLine(drawX - 36, drawY + drawH, drawX - 36, drawY, `${formatNum(realHeight)} ${units}`, true)}
+  const drawScale = Math.min(drawingWidth / srcWidth, drawingHeight / srcHeight);
+  const offsetX = drawingX + (drawingWidth - srcWidth * drawScale) / 2;
+  const offsetY = drawingY + (drawingHeight - srcHeight * drawScale) / 2;
 
-    <rect x="${margin}" y="${pageH - titleBlockH - margin}" width="${pageW - margin * 2}" height="${titleBlockH}" fill="#fff" stroke="#111" stroke-width="2" />
-    <line x1="${margin}" y1="${pageH - titleBlockH - margin + 48}" x2="${pageW - margin}" y2="${pageH - titleBlockH - margin + 48}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 720}" y1="${pageH - titleBlockH - margin}" x2="${margin + 720}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 930}" y1="${pageH - titleBlockH - margin}" x2="${margin + 930}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 1080}" y1="${pageH - titleBlockH - margin}" x2="${margin + 1080}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
-    <line x1="${margin + 1170}" y1="${pageH - titleBlockH - margin}" x2="${margin + 1170}" y2="${pageH - margin}" stroke="#111" stroke-width="1" />
+  const tx = (x) => offsetX + (x - state.bounds.minX) * drawScale;
+  const ty = (y) => pageHeight - (offsetY + (y - state.bounds.minY) * drawScale);
 
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 30}" font-size="14" font-weight="700">PROJECT</text>
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 92}" font-size="20">${esc(project)}</text>
+  const geometrySvg = state.entities
+    .map((entity) => entityToSvg(entity, tx, ty, drawScale, "#111", 1.1))
+    .join("");
 
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">DRAWING NO.</text>
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${esc(drawingNumber)}</text>
+  const generated = todayStamp();
+  const disclaim = "Concept / field-use layout. Not for fabrication without field verification.";
+  const scaleNote = `Scaled proportionally from DXF bounds to ${formatNumber(widthValue)} ${units} x ${formatNumber(heightValue)} ${units}.`;
+  const headerTitle = truncateText(title, 62);
+  const titleBlockTitle = truncateText(title, 70);
+  const projectDisplay = truncateText(project, 64);
+  const fileDisplay = truncateText(state.fileName || "Unknown", 44);
 
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">REV</text>
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${esc(revision)}</text>
+  const drawingZone = normalizeBounds(drawingX, drawingY, drawingX + drawingWidth, drawingY + drawingHeight);
+  const titleBlockRect = normalizeBounds(margin, pageHeight - margin - titleBlockHeight, pageWidth - margin, pageHeight - margin);
+  const innerLeft = margin;
+  const innerRight = pageWidth - margin;
+  const innerWidth = innerRight - innerLeft;
+  const col1W = Math.round(innerWidth * 0.35);
+  const col2W = Math.round(innerWidth * 0.29);
+  const col3W = Math.round(innerWidth * 0.16);
+  const col4W = innerWidth - col1W - col2W - col3W;
+  const col1X = innerLeft;
+  const col2X = col1X + col1W;
+  const col3X = col2X + col2W;
+  const col4X = col3X + col3W;
 
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">DATE</text>
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${today}</text>
+  const autoDimensionSvg = buildAutoDimensions({
+    entities: state.entities,
+    srcBounds: state.bounds,
+    units,
+    actualWidth: widthValue,
+    actualHeight: heightValue,
+    tx,
+    ty,
+    drawingZone,
+    titleBlockRect
+  });
 
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 24}" font-size="12" font-weight="700">DRAWN BY</text>
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 56}" font-size="18">${esc(drawnBy)}</text>
+  const blueprint = `<svg xmlns="http://www.w3.org/2000/svg" width="${pageWidth}" height="${pageHeight}" viewBox="0 0 ${pageWidth} ${pageHeight}">
+    <rect width="100%" height="100%" fill="#ffffff" />
+    <rect x="${margin}" y="${margin}" width="${pageWidth - margin * 2}" height="${pageHeight - margin * 2}" fill="none" stroke="#111" stroke-width="1.8" />
 
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 72}" font-size="12" font-weight="700">NOTES</text>
-    <text x="${margin + 12}" y="${pageH - titleBlockH - margin + 112}" font-size="13">${esc(notes).slice(0, 145)}</text>
+    <rect x="${margin}" y="${margin}" width="${pageWidth - margin * 2}" height="${headerBandHeight - 8}" fill="#f8fbff" stroke="#111" stroke-width="0.9" />
+    <line x1="${margin}" y1="${margin + headerBandHeight - 8}" x2="${pageWidth - margin}" y2="${margin + headerBandHeight - 8}" stroke="#111" stroke-width="0.9" />
+    <text x="${drawingX}" y="${margin + 19}" font-size="14" font-weight="700" font-family="Arial">${escapeXml(headerTitle)}</text>
+    <text x="${drawingX}" y="${margin + 35}" font-size="10.5" font-family="Arial">Project: ${escapeXml(projectDisplay)}</text>
+    <text x="${pageWidth - margin - 8}" y="${margin + 19}" font-size="10.5" text-anchor="end" font-family="Arial">BlueprintCaddy | ${escapeXml(page.name)}</text>
+    <text x="${pageWidth - margin - 8}" y="${margin + 35}" font-size="10.5" text-anchor="end" font-family="Arial">Generated: ${generated} | Revision: ${escapeXml(revision)}</text>
 
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">SOURCE FILE</text>
-    <text x="${margin + 732}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${esc(state.fileName || 'Uploaded DXF')}</text>
+    <rect x="${drawingX}" y="${drawingY}" width="${drawingWidth}" height="${drawingHeight}" fill="#ffffff" stroke="#222" stroke-width="1" />
+    ${geometrySvg}
+    ${autoDimensionSvg}
 
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">OVERALL SIZE</text>
-    <text x="${margin + 942}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${formatNum(realWidth)} × ${formatNum(realHeight)} ${units}</text>
+    <rect x="${margin}" y="${pageHeight - margin - titleBlockHeight}" width="${pageWidth - margin * 2}" height="${titleBlockHeight}" fill="#fbfcfe" stroke="#111" stroke-width="1.8" />
+    <line x1="${margin}" y1="${pageHeight - margin - titleBlockHeight + 44}" x2="${pageWidth - margin}" y2="${pageHeight - margin - titleBlockHeight + 44}" stroke="#111" stroke-width="1" />
+    <line x1="${col2X}" y1="${pageHeight - margin - titleBlockHeight}" x2="${col2X}" y2="${pageHeight - margin}" stroke="#111" stroke-width="1" />
+    <line x1="${col3X}" y1="${pageHeight - margin - titleBlockHeight}" x2="${col3X}" y2="${pageHeight - margin}" stroke="#111" stroke-width="1" />
+    <line x1="${col4X}" y1="${pageHeight - margin - titleBlockHeight}" x2="${col4X}" y2="${pageHeight - margin}" stroke="#111" stroke-width="1" />
 
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">SOURCE BBOX</text>
-    <text x="${margin + 1092}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${formatNum(sourceW)} × ${formatNum(sourceH)}</text>
+    <text x="${col1X + 10}" y="${pageHeight - margin - titleBlockHeight + 28}" font-size="12" font-weight="700" font-family="Arial">Drawing Title</text>
+    <text x="${col1X + 10}" y="${pageHeight - margin - titleBlockHeight + 74}" font-size="15" font-family="Arial">${escapeXml(titleBlockTitle)}</text>
+    <text x="${col1X + 10}" y="${pageHeight - margin - titleBlockHeight + 96}" font-size="11" font-weight="700" font-family="Arial">Project / Customer</text>
+    <text x="${col1X + 10}" y="${pageHeight - margin - titleBlockHeight + 113}" font-size="11.5" font-family="Arial">${escapeXml(projectDisplay)}</text>
+    <text x="${col1X + 10}" y="${pageHeight - margin - 12}" font-size="10.2" font-family="Arial">${escapeXml(disclaim)}</text>
 
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 92}" font-size="12" font-weight="700">SCALE INFO</text>
-    <text x="${margin + 1182}" y="${pageH - titleBlockH - margin + 112}" font-size="14">${esc(scaleNote)}</text>
+    <text x="${col2X + 10}" y="${pageHeight - margin - titleBlockHeight + 28}" font-size="12" font-weight="700" font-family="Arial">Source + Dimensions</text>
+    <text x="${col2X + 10}" y="${pageHeight - margin - titleBlockHeight + 56}" font-size="10.8" font-family="Arial">Source File: ${escapeXml(fileDisplay)}</text>
+    <text x="${col2X + 10}" y="${pageHeight - margin - titleBlockHeight + 74}" font-size="10.8" font-family="Arial">Actual Width: ${formatNumber(widthValue)} ${escapeXml(units)}</text>
+    <text x="${col2X + 10}" y="${pageHeight - margin - titleBlockHeight + 92}" font-size="10.8" font-family="Arial">Actual Height: ${formatNumber(heightValue)} ${escapeXml(units)}</text>
+    <text x="${col2X + 10}" y="${pageHeight - margin - titleBlockHeight + 110}" font-size="10.8" font-family="Arial">Scaled Box: ${formatNumber(scaledWidth)} x ${formatNumber(scaledHeight)} ${escapeXml(units)}</text>
 
-    <text x="${drawX}" y="${drawY - 18}" font-size="13">X Scale: ${xScale.toFixed(4)} per DXF unit</text>
-    <text x="${drawX + 240}" y="${drawY - 18}" font-size="13">Y Scale: ${yScale.toFixed(4)} per DXF unit</text>
+    <text x="${col3X + 10}" y="${pageHeight - margin - titleBlockHeight + 28}" font-size="12" font-weight="700" font-family="Arial">Sheet Info</text>
+    <text x="${col3X + 10}" y="${pageHeight - margin - titleBlockHeight + 56}" font-size="10.8" font-family="Arial">Page: ${escapeXml(page.name)}</text>
+    <text x="${col3X + 10}" y="${pageHeight - margin - titleBlockHeight + 74}" font-size="10.8" font-family="Arial">Date: ${generated}</text>
+    <text x="${col3X + 10}" y="${pageHeight - margin - titleBlockHeight + 92}" font-size="10.8" font-family="Arial">Rev: ${escapeXml(revision)}</text>
+    <text x="${col3X + 10}" y="${pageHeight - margin - titleBlockHeight + 110}" font-size="10.8" font-family="Arial">Units: ${escapeXml(units)}</text>
+
+    <text x="${col4X + 10}" y="${pageHeight - margin - titleBlockHeight + 28}" font-size="12" font-weight="700" font-family="Arial">Scale Note + Notes</text>
+    <foreignObject x="${col4X + 10}" y="${pageHeight - margin - titleBlockHeight + 40}" width="${Math.max(90, col4W - 18)}" height="${titleBlockHeight - 48}">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial;font-size:10.5px;color:#222;line-height:1.35;">
+        <div style="margin-bottom:6px;">${escapeXml(scaleNote)}</div>
+        <div>Notes: ${escapeXml(notes).replace(/\n/g, "<br>")}</div>
+      </div>
+    </foreignObject>
   </svg>`;
 
-  state.blueprintSvg = svg;
-  els.previewWrap.innerHTML = svg;
-  setStatus('Blueprint generated. Use Download SVG or Print / Save PDF.');
+  state.blueprintSvg = blueprint;
+  controls.blueprintPreview.classList.remove("empty");
+  controls.blueprintPreview.innerHTML = blueprint;
+
+  setMessage("Blueprint generated with auto-dim annotations. Export SVG or print/save PDF.", false);
+  return blueprint;
 }
 
-function downloadSvg() {
+function exportSvg() {
   if (!state.blueprintSvg) {
-    setStatus('Generate a blueprint first.', true);
+    setMessage("Generate a blueprint before exporting SVG.", true);
     return;
   }
-  const blob = new Blob([state.blueprintSvg], { type: 'image/svg+xml;charset=utf-8' });
+
+  const fileRoot = (state.fileName || "blueprint").replace(/\.dxf$/i, "");
+  const blob = new Blob([state.blueprintSvg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = (state.fileName.replace(/\.dxf$/i, '') || 'blueprint') + '_blueprint.svg';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${fileRoot}-blueprint.svg`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
   URL.revokeObjectURL(url);
 }
 
-els.dxfFile.addEventListener('change', (e) => {
-  const file = e.target.files?.[0];
-  if (file) readFile(file);
-});
+function resetAll() {
+  state.fileName = "";
+  state.sourceText = "";
+  state.entities = [];
+  state.bounds = null;
+  state.unsupported = [];
+  state.rawSvg = "";
+  state.blueprintSvg = "";
 
-['dragenter', 'dragover'].forEach(type => {
-  els.dropZone.addEventListener(type, (e) => {
-    e.preventDefault();
-    els.dropZone.classList.add('dragover');
-  });
-});
-['dragleave', 'drop'].forEach(type => {
-  els.dropZone.addEventListener(type, (e) => {
-    e.preventDefault();
-    els.dropZone.classList.remove('dragover');
-  });
-});
-els.dropZone.addEventListener('drop', (e) => {
-  const file = e.dataTransfer.files?.[0];
-  if (file) readFile(file);
-});
+  controls.dxfFile.value = "";
+  controls.dropInput.value = "";
+  controls.drawingTitle.value = "";
+  controls.projectName.value = "";
+  controls.actualWidth.value = "";
+  controls.actualHeight.value = "";
+  controls.units.value = "in";
+  controls.pagePreset.value = "letter-landscape";
+  controls.orientation.value = "landscape";
+  controls.revision.value = "Rev A";
+  controls.notes.value = "";
+  controls.dropLabel.textContent = "Drag and drop DXF here, or click Upload DXF above";
+  controls.fileMeta.textContent = "No DXF loaded";
 
-els.generateBtn.addEventListener('click', generateBlueprint);
-els.downloadSvgBtn.addEventListener('click', downloadSvg);
-els.printBtn.addEventListener('click', () => {
-  if (!state.blueprintSvg) {
-    setStatus('Generate a blueprint first.', true);
-    return;
+  controls.rawPreview.classList.add("empty");
+  controls.rawPreview.textContent = "Upload or load sample to see source geometry.";
+  controls.blueprintPreview.classList.add("empty");
+  controls.blueprintPreview.textContent = "Generate blueprint to preview printable sheet.";
+
+  renderUnsupported([]);
+  setMessage("State reset. Load a DXF file to begin.", false);
+}
+
+function wireDragDrop() {
+  ["dragenter", "dragover"].forEach((type) => {
+    controls.dropZone.addEventListener(type, (event) => {
+      event.preventDefault();
+      controls.dropZone.classList.add("dragover");
+    });
+  });
+
+  ["dragleave", "drop"].forEach((type) => {
+    controls.dropZone.addEventListener(type, (event) => {
+      event.preventDefault();
+      controls.dropZone.classList.remove("dragover");
+    });
+  });
+
+  controls.dropZone.addEventListener("drop", (event) => {
+    const file = event.dataTransfer && event.dataTransfer.files ? event.dataTransfer.files[0] : null;
+    readFile(file);
+  });
+}
+
+async function loadSample() {
+  try {
+    const response = await fetch("samples/sample-door.dxf");
+    if (!response.ok) {
+      throw new Error(`Sample not found (${response.status}).`);
+    }
+    const text = await response.text();
+    parseUpload(text, "sample-door.dxf");
+
+    if (!controls.actualWidth.value) controls.actualWidth.value = "36";
+    if (!controls.actualHeight.value) controls.actualHeight.value = "78";
+    if (!controls.drawingTitle.value) controls.drawingTitle.value = "Sample Access Door";
+    if (!controls.projectName.value) controls.projectName.value = "BlueprintCaddy Demo";
+    if (!controls.notes.value) controls.notes.value = "Sample layout generated from included DXF for workflow testing.";
+    createBlueprintSvg();
+  } catch (error) {
+    console.error(error);
+    setMessage(`Could not load sample: ${error.message}`, true);
   }
-  window.print();
-});
+}
 
-['drawingTitle', 'units', 'realWidth', 'realHeight', 'projectName', 'drawingNumber', 'revision', 'drawnBy', 'notes']
-  .forEach(id => els[id].addEventListener('input', () => {
-    if (state.entities.length) generateBlueprint();
-  }));
+function syncPresetAndOrientation() {
+  const [_, presetOrientation] = controls.pagePreset.value.split("-");
+  if (presetOrientation) {
+    controls.orientation.value = presetOrientation;
+  }
+}
+
+function attachEvents() {
+  controls.dxfFile.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
+  controls.dropInput.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
+
+  controls.generateBtn.addEventListener("click", createBlueprintSvg);
+  controls.exportBtn.addEventListener("click", exportSvg);
+  controls.printBtn.addEventListener("click", () => {
+    if (!state.blueprintSvg) {
+      setMessage("Generate a blueprint before printing.", true);
+      return;
+    }
+    window.print();
+  });
+  controls.resetBtn.addEventListener("click", resetAll);
+  controls.loadSampleBtn.addEventListener("click", loadSample);
+
+  controls.pagePreset.addEventListener("change", syncPresetAndOrientation);
+}
+
+wireDragDrop();
+attachEvents();
+resetAll();
