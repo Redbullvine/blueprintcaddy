@@ -575,7 +575,8 @@ function buildAutoDimensions(config) {
     tx,
     ty,
     drawingZone,
-    titleBlockRect
+    titleBlockRect,
+    headerBandRect
   } = config;
 
   const srcWidth = Math.max(0.0001, srcBounds.maxX - srcBounds.minX);
@@ -586,15 +587,16 @@ function buildAutoDimensions(config) {
 
   const geometryBox = toFeatureBounds(srcBounds, tx, ty);
   const occupied = [];
-  const fixedBlockers = [titleBlockRect];
+  const fixedBlockers = [titleBlockRect, headerBandRect];
 
   const rectangles = detectRectangles(entities).slice(0, 18);
   const circles = detectCircles(entities).slice(0, 24);
 
-  const featureShapeBoxes = [];
-  rectangles.forEach((rect) => {
-    featureShapeBoxes.push(toFeatureBounds(rect.rawBounds, tx, ty));
-  });
+  const rectangleFeatures = rectangles.map((rect) => ({
+    rect,
+    mappedBounds: toFeatureBounds(rect.rawBounds, tx, ty)
+  }));
+  const featureShapeBoxes = rectangleFeatures.map((feature) => feature.mappedBounds);
   circles.forEach((circle) => {
     featureShapeBoxes.push(normalizeBounds(tx(circle.cx - circle.r), ty(circle.cy + circle.r), tx(circle.cx + circle.r), ty(circle.cy - circle.r)));
   });
@@ -604,15 +606,19 @@ function buildAutoDimensions(config) {
   const overallWidthText = `${formatNumber(actualWidth)} ${units}`;
   const overallHeightText = `${formatNumber(actualHeight)} ${units}`;
 
-  const overallWidthCandidates = [geometryBox.maxY + 24, geometryBox.maxY + 38, geometryBox.maxY + 52]
-    .filter((y) => y < titleBlockRect.minY - 8 && y < drawingZone.maxY - 4);
+  const preferredOverallWidthCandidates = [geometryBox.minY - 16, geometryBox.minY - 28, geometryBox.minY - 40];
+  const fallbackOverallWidthCandidates = [geometryBox.minY - 10, drawingZone.minY + 14, drawingZone.minY + 22];
+  const overallWidthCandidates = preferredOverallWidthCandidates
+    .concat(fallbackOverallWidthCandidates)
+    .filter((y, idx, arr) => arr.indexOf(y) === idx)
+    .filter((y) => y > drawingZone.minY + 6 && y < geometryBox.minY - 4);
   const overallHeightCandidates = [geometryBox.minX - 24, geometryBox.minX - 38, geometryBox.minX - 52]
     .filter((x) => x > drawingZone.minX + 4);
 
   fragments.push(renderHorizontalDimension({
     x1: geometryBox.minX,
     x2: geometryBox.maxX,
-    refY: geometryBox.maxY,
+    refY: geometryBox.minY,
     candidateYs: overallWidthCandidates,
     text: overallWidthText
   }, occupied, fixedBlockers.concat(featureShapeBoxes)));
@@ -625,9 +631,10 @@ function buildAutoDimensions(config) {
     text: overallHeightText
   }, occupied, fixedBlockers.concat(featureShapeBoxes)));
 
-  rectangles.forEach((rect) => {
-    const mapped = toFeatureBounds(rect.rawBounds, tx, ty);
-    const blockers = fixedBlockers.concat(featureShapeBoxes.filter((box) => box !== mapped));
+  rectangleFeatures.forEach((feature, featureIndex) => {
+    const rect = feature.rect;
+    const mapped = feature.mappedBounds;
+    const blockers = fixedBlockers.concat(featureShapeBoxes.filter((_, idx) => idx !== featureIndex));
 
     const widthText = `${formatNumber(rect.rawWidth * xUnitPerDxf)} ${units}`;
     const widthCandidates = [mapped.minY - 14, mapped.maxY + 14, mapped.minY - 28, mapped.maxY + 28]
@@ -717,9 +724,17 @@ function createBlueprintSvg() {
   const scaledWidth = srcWidth * uniformScale;
   const scaledHeight = srcHeight * uniformScale;
 
-  const drawScale = Math.min(drawingWidth / srcWidth, drawingHeight / srcHeight);
-  const offsetX = drawingX + (drawingWidth - srcWidth * drawScale) / 2;
-  const offsetY = drawingY + (drawingHeight - srcHeight * drawScale) / 2;
+  const fitInset = {
+    top: 30,
+    right: 16,
+    bottom: 18,
+    left: 30
+  };
+  const fitWidth = Math.max(20, drawingWidth - fitInset.left - fitInset.right);
+  const fitHeight = Math.max(20, drawingHeight - fitInset.top - fitInset.bottom);
+  const drawScale = Math.min(fitWidth / srcWidth, fitHeight / srcHeight);
+  const offsetX = drawingX + fitInset.left + (fitWidth - srcWidth * drawScale) / 2;
+  const offsetY = drawingY + fitInset.top + (fitHeight - srcHeight * drawScale) / 2;
 
   const tx = (x) => offsetX + (x - state.bounds.minX) * drawScale;
   const ty = (y) => pageHeight - (offsetY + (y - state.bounds.minY) * drawScale);
@@ -738,6 +753,7 @@ function createBlueprintSvg() {
 
   const drawingZone = normalizeBounds(drawingX, drawingY, drawingX + drawingWidth, drawingY + drawingHeight);
   const titleBlockRect = normalizeBounds(margin, pageHeight - margin - titleBlockHeight, pageWidth - margin, pageHeight - margin);
+  const headerBandRect = normalizeBounds(margin, margin, pageWidth - margin, margin + headerBandHeight - 8);
   const innerLeft = margin;
   const innerRight = pageWidth - margin;
   const innerWidth = innerRight - innerLeft;
@@ -759,7 +775,8 @@ function createBlueprintSvg() {
     tx,
     ty,
     drawingZone,
-    titleBlockRect
+    titleBlockRect,
+    headerBandRect
   });
 
   const blueprint = `<svg xmlns="http://www.w3.org/2000/svg" width="${pageWidth}" height="${pageHeight}" viewBox="0 0 ${pageWidth} ${pageHeight}">
