@@ -268,8 +268,11 @@ function toFeatureBounds(rawBounds, tx, ty) {
   return normalizeBounds(tx(rawBounds.minX), ty(rawBounds.maxY), tx(rawBounds.maxX), ty(rawBounds.minY));
 }
 
-function detectRectangles(entities) {
-  const tolerance = 1e-4;
+function approxEqual(a, b, tolerance) {
+  return Math.abs(a - b) <= tolerance;
+}
+
+function detectRectanglesFromPolylines(entities, tolerance) {
   const rectangles = [];
 
   entities.forEach((entity) => {
@@ -326,6 +329,133 @@ function detectRectangles(entities) {
   });
 
   return rectangles;
+}
+
+function detectRectanglesFromLineLoops(entities, tolerance) {
+  const horizontals = [];
+  const verticals = [];
+
+  entities.forEach((entity, index) => {
+    if (entity.type !== "LINE") {
+      return;
+    }
+
+    const x1 = entity.x1;
+    const y1 = entity.y1;
+    const x2 = entity.x2;
+    const y2 = entity.y2;
+
+    if (approxEqual(y1, y2, tolerance)) {
+      const y = (y1 + y2) / 2;
+      horizontals.push({
+        index,
+        y,
+        xMin: Math.min(x1, x2),
+        xMax: Math.max(x1, x2)
+      });
+      return;
+    }
+
+    if (approxEqual(x1, x2, tolerance)) {
+      const x = (x1 + x2) / 2;
+      verticals.push({
+        index,
+        x,
+        yMin: Math.min(y1, y2),
+        yMax: Math.max(y1, y2)
+      });
+    }
+  });
+
+  const rectangles = [];
+
+  for (let i = 0; i < horizontals.length; i += 1) {
+    const h1 = horizontals[i];
+    for (let j = i + 1; j < horizontals.length; j += 1) {
+      const h2 = horizontals[j];
+
+      if (!approxEqual(h1.xMin, h2.xMin, tolerance) || !approxEqual(h1.xMax, h2.xMax, tolerance)) {
+        continue;
+      }
+      if (approxEqual(h1.y, h2.y, tolerance)) {
+        continue;
+      }
+
+      const minX = Math.min(h1.xMin, h1.xMax);
+      const maxX = Math.max(h1.xMin, h1.xMax);
+      const minY = Math.min(h1.y, h2.y);
+      const maxY = Math.max(h1.y, h2.y);
+
+      if (maxX - minX <= tolerance || maxY - minY <= tolerance) {
+        continue;
+      }
+
+      const leftCandidates = verticals.filter((v) =>
+        approxEqual(v.x, minX, tolerance) &&
+        approxEqual(v.yMin, minY, tolerance) &&
+        approxEqual(v.yMax, maxY, tolerance)
+      );
+      if (!leftCandidates.length) {
+        continue;
+      }
+
+      const rightCandidates = verticals.filter((v) =>
+        approxEqual(v.x, maxX, tolerance) &&
+        approxEqual(v.yMin, minY, tolerance) &&
+        approxEqual(v.yMax, maxY, tolerance)
+      );
+      if (!rightCandidates.length) {
+        continue;
+      }
+
+      let rectangleFound = false;
+      for (const left of leftCandidates) {
+        for (const right of rightCandidates) {
+          const lineIndexes = new Set([h1.index, h2.index, left.index, right.index]);
+          if (lineIndexes.size !== 4) {
+            continue;
+          }
+          rectangles.push({
+            rawBounds: { minX, minY, maxX, maxY },
+            rawWidth: maxX - minX,
+            rawHeight: maxY - minY
+          });
+          rectangleFound = true;
+          break;
+        }
+        if (rectangleFound) {
+          break;
+        }
+      }
+    }
+  }
+
+  return rectangles;
+}
+
+function dedupeRectangles(rectangles, tolerance) {
+  const unique = [];
+
+  rectangles.forEach((rect) => {
+    const exists = unique.some((candidate) =>
+      approxEqual(candidate.rawBounds.minX, rect.rawBounds.minX, tolerance) &&
+      approxEqual(candidate.rawBounds.minY, rect.rawBounds.minY, tolerance) &&
+      approxEqual(candidate.rawBounds.maxX, rect.rawBounds.maxX, tolerance) &&
+      approxEqual(candidate.rawBounds.maxY, rect.rawBounds.maxY, tolerance)
+    );
+    if (!exists) {
+      unique.push(rect);
+    }
+  });
+
+  return unique;
+}
+
+function detectRectangles(entities) {
+  const tolerance = 1e-4;
+  const fromPolylines = detectRectanglesFromPolylines(entities, tolerance);
+  const fromLineLoops = detectRectanglesFromLineLoops(entities, tolerance);
+  return dedupeRectangles(fromPolylines.concat(fromLineLoops), tolerance);
 }
 
 function detectCircles(entities) {
