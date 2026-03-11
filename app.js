@@ -1,3 +1,6 @@
+import { processSketchImage } from "./modules/sketchToVector.js";
+import { cleanScannedSketch } from "./modules/sketchScanner.js";
+
 const state = {
   fileName: "",
   sourceText: "",
@@ -8,7 +11,8 @@ const state = {
   blueprintSvg: "",
   explanationText: "",
   cutListText: "",
-  cutListCsv: ""
+  cutListCsv: "",
+  pendingScanCanvas: null
 };
 
 const PAGE_PRESETS = {
@@ -19,6 +23,10 @@ const PAGE_PRESETS = {
 const controls = {
   dxfFile: document.getElementById("dxfFile"),
   dropInput: document.getElementById("dxfDropInput"),
+  btnImportSketch: document.getElementById("btnImportSketch"),
+  btnScanSketch: document.getElementById("btnScanSketch"),
+  sketchUpload: document.getElementById("sketchUpload"),
+  sketchCameraCapture: document.getElementById("sketchCameraCapture"),
   dropZone: document.getElementById("dropZone"),
   dropLabel: document.getElementById("dropLabel"),
   createTemplateBtn: document.getElementById("createTemplateBtn"),
@@ -53,7 +61,13 @@ const controls = {
   loadSampleBtn: document.getElementById("loadSampleBtn"),
   rawPreview: document.getElementById("rawPreview"),
   blueprintPreview: document.getElementById("blueprintPreview"),
-  fileMeta: document.getElementById("fileMeta")
+  fileMeta: document.getElementById("fileMeta"),
+  processingModal: document.getElementById("processingModal"),
+  processingStatus: document.getElementById("processingStatus"),
+  scanPreviewModal: document.getElementById("scanPreviewModal"),
+  scanPreviewImage: document.getElementById("scanPreviewImage"),
+  useScanBtn: document.getElementById("useScanBtn"),
+  retakeScanBtn: document.getElementById("retakeScanBtn")
 };
 
 function setMessage(text, isError) {
@@ -205,6 +219,10 @@ function parseUpload(text, fileName) {
   }
 }
 
+function loadDXF(dxfText, sourceName) {
+  parseUpload(String(dxfText || ""), sourceName || "sketch-import.dxf");
+}
+
 function readFile(file) {
   if (!file) {
     setMessage("No file selected. Upload a DXF file to continue.", true);
@@ -220,6 +238,123 @@ function readFile(file) {
   reader.onload = () => parseUpload(String(reader.result || ""), file.name);
   reader.onerror = () => setMessage("Could not read file. Try another DXF.", true);
   reader.readAsText(file);
+}
+
+function setProcessingState(isOpen, statusText) {
+  if (!controls.processingModal || !controls.processingStatus) {
+    return;
+  }
+  controls.processingModal.hidden = !isOpen;
+  controls.processingStatus.textContent = statusText || "Preparing image...";
+}
+
+function setProcessingStatus(statusText) {
+  if (!controls.processingStatus) return;
+  controls.processingStatus.textContent = statusText;
+}
+
+function canvasToBlob(canvas, type = "image/png", quality = 0.95) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Could not create image blob."));
+        return;
+      }
+      resolve(blob);
+    }, type, quality);
+  });
+}
+
+async function runSketchToDxfPipeline(source, sourceName) {
+  setProcessingState(true, "Tracing Lines...");
+  setProcessingStatus("Generating DXF...");
+  const dxf = await processSketchImage(source);
+  loadDXF(dxf, sourceName || "sketch-import.dxf");
+  setMessage("Sketch converted to DXF and loaded. Enter dimensions and generate blueprint.", false);
+}
+
+async function handleSketchUpload(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  if (!/^image\/(png|jpeg)$/i.test(file.type)) {
+    setMessage("Sketch import supports PNG and JPEG files.", true);
+    event.target.value = "";
+    return;
+  }
+
+  try {
+    setProcessingState(true, "Processing Sketch...");
+    await runSketchToDxfPipeline(file, `${file.name.replace(/\.[^.]+$/, "")}-sketch.dxf`);
+  } catch (error) {
+    console.error(error);
+    setMessage(`Sketch import failed: ${error.message}`, true);
+  } finally {
+    setProcessingState(false);
+    event.target.value = "";
+  }
+}
+
+function closeScanPreview() {
+  state.pendingScanCanvas = null;
+  if (controls.scanPreviewImage) {
+    controls.scanPreviewImage.src = "";
+  }
+  if (controls.scanPreviewModal) {
+    controls.scanPreviewModal.hidden = true;
+  }
+}
+
+function showScanPreview(canvas) {
+  state.pendingScanCanvas = canvas;
+  controls.scanPreviewImage.src = canvas.toDataURL("image/png");
+  controls.scanPreviewModal.hidden = false;
+}
+
+async function handleSketchCameraCapture(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    setProcessingState(true, "Scanning Sketch...");
+    setProcessingStatus("Cleaning Image...");
+    const cleanedCanvas = await cleanScannedSketch(file);
+    setProcessingState(false);
+    showScanPreview(cleanedCanvas);
+  } catch (error) {
+    console.error(error);
+    setProcessingState(false);
+    setMessage(`Scan failed: ${error.message}. Falling back to file upload.`, true);
+    if (controls.sketchUpload) {
+      controls.sketchUpload.click();
+    }
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function confirmUseScan() {
+  if (!(state.pendingScanCanvas instanceof HTMLCanvasElement)) {
+    closeScanPreview();
+    return;
+  }
+
+  try {
+    controls.scanPreviewModal.hidden = true;
+    setProcessingState(true, "Tracing Lines...");
+    const cleanedBlob = await canvasToBlob(state.pendingScanCanvas);
+    await runSketchToDxfPipeline(cleanedBlob, "camera-scan-sketch.dxf");
+  } catch (error) {
+    console.error(error);
+    setMessage(`Could not import scan: ${error.message}`, true);
+  } finally {
+    setProcessingState(false);
+    closeScanPreview();
+  }
 }
 
 function computeBoundsFromEntities(entities) {
@@ -1206,9 +1341,12 @@ function resetAll() {
   state.explanationText = "";
   state.cutListText = "";
   state.cutListCsv = "";
+  state.pendingScanCanvas = null;
 
   controls.dxfFile.value = "";
   controls.dropInput.value = "";
+  if (controls.sketchUpload) controls.sketchUpload.value = "";
+  if (controls.sketchCameraCapture) controls.sketchCameraCapture.value = "";
   controls.drawingTitle.value = "";
   controls.projectName.value = "";
   controls.actualWidth.value = "";
@@ -1231,6 +1369,9 @@ function resetAll() {
   controls.explainText.textContent = "";
   controls.cutListText.textContent = "";
   controls.templatePanel.hidden = true;
+  if (controls.processingModal) controls.processingModal.hidden = true;
+  if (controls.scanPreviewModal) controls.scanPreviewModal.hidden = true;
+  if (controls.scanPreviewImage) controls.scanPreviewImage.src = "";
   renderTemplateFields();
 
   renderUnsupported([]);
@@ -1289,6 +1430,22 @@ function syncPresetAndOrientation() {
 function attachEvents() {
   controls.dxfFile.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
   controls.dropInput.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
+  controls.btnImportSketch?.addEventListener("click", () => controls.sketchUpload?.click());
+  controls.btnScanSketch?.addEventListener("click", () => {
+    const canUseCaptureInput = controls.sketchCameraCapture && ("capture" in controls.sketchCameraCapture);
+    if (canUseCaptureInput) {
+      controls.sketchCameraCapture.click();
+      return;
+    }
+    controls.sketchUpload?.click();
+  });
+  controls.sketchUpload?.addEventListener("change", handleSketchUpload);
+  controls.sketchCameraCapture?.addEventListener("change", handleSketchCameraCapture);
+  controls.useScanBtn?.addEventListener("click", confirmUseScan);
+  controls.retakeScanBtn?.addEventListener("click", () => {
+    closeScanPreview();
+    controls.sketchCameraCapture?.click();
+  });
 
   controls.generateBtn.addEventListener("click", createBlueprintSvg);
   controls.explainBtn.addEventListener("click", buildBlueprintExplanation);

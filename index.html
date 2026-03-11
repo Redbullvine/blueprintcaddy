@@ -25,11 +25,18 @@
 
       <div class="tool-strip">
         <label for="dxfFile" class="btn btn-secondary">Upload DXF</label>
+        <button id="btnImportSketch" class="btn btn-secondary toolbar-btn" type="button">📁 Import Sketch</button>
+        <button id="btnScanSketch" class="btn btn-secondary toolbar-btn" type="button">📷 Scan Sketch</button>
         <button id="createTemplateBtn" class="btn btn-secondary" type="button">Create from Template</button>
         <button id="generateBtn" class="btn btn-primary" type="button">Generate Blueprint</button>
         <button id="explainBtn" class="btn btn-secondary" type="button">Explain Blueprint</button>
         <button id="cutListBtn" class="btn btn-secondary" type="button">Generate Cut List</button>
       </div>
+      <input type="file" id="sketchUpload" accept="image/png,image/jpeg" hidden />
+      <input type="file" id="sketchCameraCapture" accept="image/*" capture="environment" hidden />
+      <p class="scan-guidance">
+        Best results: dark pen or marker, plain paper, include at least one written measurement, avoid heavy shadows, keep whole page visible.
+      </p>
 
       <div id="templatePanel" class="template-panel" hidden>
         <h3>Template Starter</h3>
@@ -140,7 +147,28 @@
     <span>Concept / field-use layout. Not certified fabrication engineering.</span>
   </footer>
 
+  <div id="processingModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <h3>Processing Sketch...</h3>
+      <p id="processingStatus">Preparing image...</p>
+    </div>
+  </div>
+
+  <div id="scanPreviewModal" class="modal" hidden>
+    <div class="modal-card modal-card-wide">
+      <h3>Preview Cleaned Scan</h3>
+      <div class="scan-preview-wrap">
+        <img id="scanPreviewImage" alt="Cleaned sketch preview" />
+      </div>
+      <div class="modal-actions">
+        <button id="useScanBtn" class="btn btn-primary" type="button">Use This Scan</button>
+        <button id="retakeScanBtn" class="btn btn-secondary" type="button">Retake / Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="lib/dxf-parser.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

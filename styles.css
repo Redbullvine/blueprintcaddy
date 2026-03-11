@@ -112,6 +112,20 @@ h3 {
   gap: 0.55rem;
 }
 
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.scan-guidance {
+  margin: 0.65rem 0 0;
+  font-size: 0.79rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .template-panel {
   margin-top: 0.8rem;
   border: 1px solid var(--line);
@@ -325,6 +339,78 @@ textarea {
   font-size: 0.82rem;
 }
 
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 25, 38, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-card {
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(20, 34, 56, 0.25);
+  padding: 1rem;
+}
+
+.modal-card-wide {
+  width: min(760px, 100%);
+}
+
+.modal-card h3 {
+  margin: 0;
+}
+
+.modal-card p {
+  margin: 0.55rem 0 0;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid #d2dbe8;
+  border-top-color: var(--primary);
+  animation: spin 0.75s linear infinite;
+  margin-bottom: 0.6rem;
+}
+
+.scan-preview-wrap {
+  margin-top: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: min(62vh, 560px);
+  background: #fff;
+  display: grid;
+  place-items: center;
+}
+
+.scan-preview-wrap img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.modal-actions {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 1180px) {
   .layout {
     grid-template-columns: 1fr;
@@ -365,6 +451,18 @@ textarea {
   .app-footer {
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  .modal {
+    padding: 0.65rem;
+  }
+
+  .modal-card {
+    padding: 0.85rem;
+  }
+
+  .modal-actions {
+    grid-template-columns: 1fr;
   }
 }
 
