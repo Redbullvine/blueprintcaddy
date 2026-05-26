@@ -1,5 +1,6 @@
 import { processSketchImage } from "./modules/sketchToVector.js";
 import { cleanScannedSketch } from "./modules/sketchScanner.js";
+import { DEFAULT_PALLET_CANDIDATES, optimizePalletStack } from "./modules/palletOptimizer.js";
 
 const state = {
   fileName: "",
@@ -19,6 +20,14 @@ const PAGE_PRESETS = {
   letter: { widthIn: 11, heightIn: 8.5 },
   tabloid: { widthIn: 17, heightIn: 11 }
 };
+
+const BOX_COLORS = ["#1d4f8f", "#d89d26", "#2e7d5b", "#8b4fb8", "#b84a3a", "#327d9d"];
+
+const PALLET_SAMPLE_BOXES = [
+  { name: "Carton A", length: 16, width: 12, height: 10, quantity: 36 },
+  { name: "Carton B", length: 20, width: 14, height: 12, quantity: 24 },
+  { name: "Carton C", length: 10, width: 8, height: 8, quantity: 48 }
+];
 
 const controls = {
   dxfFile: document.getElementById("dxfFile"),
@@ -69,7 +78,20 @@ const controls = {
   scanPreviewClose: document.getElementById("scanPreviewClose"),
   useScanBtn: document.getElementById("useScanBtn"),
   retakeScanBtn: document.getElementById("retakeScanBtn"),
-  cancelScanBtn: document.getElementById("cancelScanBtn")
+  cancelScanBtn: document.getElementById("cancelScanBtn"),
+  boxRows: document.getElementById("boxRows"),
+  addBoxRowBtn: document.getElementById("addBoxRowBtn"),
+  loadPalletSampleBtn: document.getElementById("loadPalletSampleBtn"),
+  clearPalletBtn: document.getElementById("clearPalletBtn"),
+  optimizePalletBtn: document.getElementById("optimizePalletBtn"),
+  palletUnit: document.getElementById("palletUnit"),
+  maxStackHeight: document.getElementById("maxStackHeight"),
+  customPalletName: document.getElementById("customPalletName"),
+  customPalletLength: document.getElementById("customPalletLength"),
+  customPalletWidth: document.getElementById("customPalletWidth"),
+  palletSummary: document.getElementById("palletSummary"),
+  palletPlan: document.getElementById("palletPlan"),
+  palletPatterns: document.getElementById("palletPatterns")
 };
 
 function setMessage(text, isError) {
@@ -129,6 +151,333 @@ function mapPageSize() {
     heightIn,
     name: `${sheet === "tabloid" ? "Tabloid" : "Letter"} ${orientation}`
   };
+}
+
+function formatPercent(value) {
+  return `${Math.round((Number(value) || 0) * 100)}%`;
+}
+
+function formatDimension(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return formatNumber(number, number >= 10 ? 1 : 2);
+}
+
+function parsePositiveNumber(value) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function parsePositiveInteger(value) {
+  const number = Number.parseInt(value, 10);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function dimensionFromInches(value, unit) {
+  if (unit === "ft") return value / 12;
+  if (unit === "mm") return value * 25.4;
+  return value;
+}
+
+function defaultStackHeightForUnit(unit) {
+  return dimensionFromInches(60, unit);
+}
+
+function setPalletStatus(message, isError = false) {
+  if (!controls.palletSummary) return;
+  controls.palletSummary.classList.toggle("error", Boolean(isError));
+  controls.palletSummary.innerHTML = message;
+}
+
+function rowValue(row, selector) {
+  return row.querySelector(selector)?.value?.trim() || "";
+}
+
+function renumberBoxRows() {
+  if (!controls.boxRows) return;
+  [...controls.boxRows.querySelectorAll("tr")].forEach((row, index) => {
+    const nameInput = row.querySelector(".box-name");
+    if (nameInput) {
+      nameInput.placeholder = `Box ${index + 1}`;
+    }
+  });
+}
+
+function addBoxRow(values = {}) {
+  if (!controls.boxRows) return;
+
+  const row = document.createElement("tr");
+  row.innerHTML = `
+    <td><input class="box-name" type="text" placeholder="Box ${controls.boxRows.children.length + 1}" value="${escapeXml(values.name || "")}" /></td>
+    <td><input class="box-length" type="number" min="0" step="0.001" value="${values.length || ""}" /></td>
+    <td><input class="box-width" type="number" min="0" step="0.001" value="${values.width || ""}" /></td>
+    <td><input class="box-height" type="number" min="0" step="0.001" value="${values.height || ""}" /></td>
+    <td><input class="box-quantity" type="number" min="1" step="1" value="${values.quantity || ""}" /></td>
+    <td><button class="btn btn-ghost btn-small remove-box-row" type="button">Remove</button></td>
+  `;
+
+  row.querySelector(".remove-box-row")?.addEventListener("click", () => {
+    row.remove();
+    if (!controls.boxRows.children.length) {
+      addBoxRow();
+    }
+    renumberBoxRows();
+  });
+
+  controls.boxRows.appendChild(row);
+}
+
+function clearPalletPlanner() {
+  if (controls.boxRows) {
+    controls.boxRows.innerHTML = "";
+    addBoxRow();
+  }
+  if (controls.customPalletName) controls.customPalletName.value = "";
+  if (controls.customPalletLength) controls.customPalletLength.value = "";
+  if (controls.customPalletWidth) controls.customPalletWidth.value = "";
+  if (controls.palletUnit) controls.palletUnit.value = "in";
+  if (controls.maxStackHeight) controls.maxStackHeight.value = formatDimension(defaultStackHeightForUnit("in"));
+  if (controls.palletPlan) controls.palletPlan.innerHTML = "";
+  if (controls.palletPatterns) controls.palletPatterns.innerHTML = "";
+  setPalletStatus("No stack plan yet.", false);
+}
+
+function loadPalletSample() {
+  if (!controls.boxRows) return;
+  controls.boxRows.innerHTML = "";
+  PALLET_SAMPLE_BOXES.forEach((box) => addBoxRow(box));
+  if (controls.palletUnit) controls.palletUnit.value = "in";
+  if (controls.maxStackHeight) controls.maxStackHeight.value = formatDimension(defaultStackHeightForUnit("in"));
+  handleOptimizePallet();
+}
+
+function collectPalletBoxes() {
+  const rows = controls.boxRows ? [...controls.boxRows.querySelectorAll("tr")] : [];
+  const boxes = [];
+  const errors = [];
+
+  rows.forEach((row, index) => {
+    const rawLength = rowValue(row, ".box-length");
+    const rawWidth = rowValue(row, ".box-width");
+    const rawHeight = rowValue(row, ".box-height");
+    const rawQuantity = rowValue(row, ".box-quantity");
+    const hasAnyValue = [rowValue(row, ".box-name"), rawLength, rawWidth, rawHeight, rawQuantity].some(Boolean);
+
+    if (!hasAnyValue) {
+      return;
+    }
+
+    const length = parsePositiveNumber(rawLength);
+    const width = parsePositiveNumber(rawWidth);
+    const height = parsePositiveNumber(rawHeight);
+    const quantity = parsePositiveInteger(rawQuantity);
+
+    if (!length || !width || !height || !quantity) {
+      errors.push(`Box ${index + 1} needs length, width, height, and quantity.`);
+      return;
+    }
+
+    boxes.push({
+      id: `box-${index + 1}`,
+      name: rowValue(row, ".box-name") || `Box ${index + 1}`,
+      length,
+      width,
+      height,
+      quantity
+    });
+  });
+
+  if (!boxes.length && !errors.length) {
+    errors.push("Add at least one box size and quantity.");
+  }
+
+  return { boxes, errors };
+}
+
+function collectPalletCandidates() {
+  const unit = controls.palletUnit?.value || "in";
+  const pallets = DEFAULT_PALLET_CANDIDATES.map((pallet) => ({
+    ...pallet,
+    length: dimensionFromInches(pallet.length, unit),
+    width: dimensionFromInches(pallet.width, unit)
+  }));
+  const customLength = parsePositiveNumber(controls.customPalletLength?.value);
+  const customWidth = parsePositiveNumber(controls.customPalletWidth?.value);
+  const customName = controls.customPalletName?.value?.trim() || "Custom";
+  const errors = [];
+
+  if (customLength || customWidth) {
+    if (!customLength || !customWidth) {
+      errors.push("Custom pallet needs both length and width.");
+    } else {
+      pallets.push({
+        id: "custom",
+        name: customName,
+        length: customLength,
+        width: customWidth
+      });
+    }
+  }
+
+  return { pallets, errors };
+}
+
+function colorForBox(boxId) {
+  const number = Number.parseInt(String(boxId).replace(/\D/g, ""), 10);
+  const index = Number.isFinite(number) && number > 0 ? number - 1 : 0;
+  return BOX_COLORS[index % BOX_COLORS.length];
+}
+
+function renderFootprintSvg(boxPlan) {
+  const { pallet, pattern, box } = boxPlan;
+  const color = colorForBox(box.id);
+  const rects = [];
+  let drawn = 0;
+
+  pattern.zones.forEach((zone) => {
+    for (let row = 0; row < zone.rows; row += 1) {
+      for (let column = 0; column < zone.columns; column += 1) {
+        if (drawn > 220) return;
+        const x = zone.x + column * zone.boxLength;
+        const y = zone.y + row * zone.boxWidth;
+        rects.push(`<rect x="${x}" y="${y}" width="${zone.boxLength}" height="${zone.boxWidth}" rx="0.75" fill="${color}" fill-opacity="0.72" stroke="#ffffff" stroke-width="0.45" />`);
+        drawn += 1;
+      }
+    }
+  });
+
+  return `<svg class="footprint-svg" viewBox="0 0 ${pallet.length} ${pallet.width}" role="img" aria-label="${escapeXml(box.name)} pallet footprint">
+    <rect x="0" y="0" width="${pallet.length}" height="${pallet.width}" rx="1.5" fill="#f8fbff" stroke="#8293a8" stroke-width="0.8" />
+    ${rects.join("")}
+  </svg>`;
+}
+
+function renderStackSvg(palletStack, maxStackHeight) {
+  const chartHeight = 180;
+  const chartWidth = 96;
+  let y = chartHeight;
+  const layers = palletStack.layers.map((layer) => {
+    const height = Math.max(2, (layer.height / maxStackHeight) * chartHeight);
+    y -= height;
+    return `<rect x="18" y="${Math.max(0, y)}" width="60" height="${height}" fill="${colorForBox(layer.boxId)}" fill-opacity="0.8" stroke="#ffffff" stroke-width="1">
+      <title>${escapeXml(layer.boxName)}: ${layer.count} boxes, ${formatDimension(layer.height)} high</title>
+    </rect>`;
+  });
+
+  return `<svg class="stack-svg" viewBox="0 0 ${chartWidth} ${chartHeight + 22}" role="img" aria-label="Pallet ${palletStack.id} stack">
+    <rect x="18" y="0" width="60" height="${chartHeight}" rx="2" fill="#eef3f8" stroke="#9dadc0" stroke-width="1" />
+    ${layers.join("")}
+    <rect x="10" y="${chartHeight}" width="76" height="10" rx="1.5" fill="#9b7650" />
+  </svg>`;
+}
+
+function renderPalletStackCard(palletStack, maxStackHeight, unit) {
+  const layerRows = palletStack.layers.map((layer, index) => `
+    <li>
+      <span class="box-swatch" style="background:${colorForBox(layer.boxId)}"></span>
+      <span>${index + 1}. ${escapeXml(layer.boxName)}: ${layer.count}/${layer.capacity} boxes, ${formatDimension(layer.height)} ${escapeXml(unit)} high</span>
+    </li>
+  `).join("");
+
+  return `
+    <article class="pallet-stack-card">
+      <div class="stack-visual">${renderStackSvg(palletStack, maxStackHeight)}</div>
+      <div class="stack-details">
+        <h3>Pallet ${palletStack.id}</h3>
+        <p>${formatDimension(palletStack.usedHeight)} ${escapeXml(unit)} used of ${formatDimension(maxStackHeight)} ${escapeXml(unit)}</p>
+        <ol class="stack-layer-list">${layerRows}</ol>
+      </div>
+    </article>
+  `;
+}
+
+function renderPatternCard(boxPlan, unit) {
+  const { box, pattern, layersNeeded } = boxPlan;
+  return `
+    <article class="pattern-card">
+      <div class="pattern-head">
+        <span class="box-swatch" style="background:${colorForBox(box.id)}"></span>
+        <h3>${escapeXml(box.name)}</h3>
+      </div>
+      ${renderFootprintSvg(boxPlan)}
+      <p>${pattern.boxesPerLayer} per layer, ${layersNeeded} layer${layersNeeded === 1 ? "" : "s"}, ${formatPercent(pattern.utilization)} footprint fill</p>
+      <p>${formatDimension(box.length)} x ${formatDimension(box.width)} x ${formatDimension(box.height)} ${escapeXml(unit)}, qty ${box.quantity}</p>
+    </article>
+  `;
+}
+
+function renderPalletResults(result) {
+  const best = result.best;
+  const unit = controls.palletUnit?.value || "in";
+  const rankingRows = result.plans.slice(0, 5).map((plan, index) => `
+    <tr>
+      <td>${index + 1}</td>
+      <td>${escapeXml(plan.pallet.name)}</td>
+      <td>${formatDimension(plan.pallet.length)} x ${formatDimension(plan.pallet.width)}</td>
+      <td>${plan.pallets.length}</td>
+      <td>${formatPercent(plan.averageFootprintUtilization)}</td>
+    </tr>
+  `).join("");
+
+  setPalletStatus(`
+    <div class="pallet-summary-main">
+      <strong>Best: ${escapeXml(best.pallet.name)} (${formatDimension(best.pallet.length)} x ${formatDimension(best.pallet.width)} ${escapeXml(unit)})</strong>
+      <span>${best.pallets.length} pallet${best.pallets.length === 1 ? "" : "s"} for ${best.totalBoxes} boxes. Tallest stack: ${formatDimension(best.maxHeightUsed)} ${escapeXml(unit)}.</span>
+    </div>
+    <table class="rank-table">
+      <thead><tr><th>#</th><th>Pallet</th><th>Size</th><th>Count</th><th>Fill</th></tr></thead>
+      <tbody>${rankingRows}</tbody>
+    </table>
+  `, false);
+
+  if (controls.palletPlan) {
+    controls.palletPlan.innerHTML = best.pallets
+      .map((palletStack) => renderPalletStackCard(palletStack, best.maxStackHeight, unit))
+      .join("");
+  }
+
+  if (controls.palletPatterns) {
+    controls.palletPatterns.innerHTML = best.boxPlans
+      .map((boxPlan) => renderPatternCard(boxPlan, unit))
+      .join("");
+  }
+}
+
+function handleOptimizePallet() {
+  const { boxes, errors: boxErrors } = collectPalletBoxes();
+  const { pallets, errors: palletErrors } = collectPalletCandidates();
+  const maxStackHeight = parsePositiveNumber(controls.maxStackHeight?.value) || 60;
+  const errors = [...boxErrors, ...palletErrors];
+
+  if (errors.length) {
+    setPalletStatus(errors.map((error) => `<div>${escapeXml(error)}</div>`).join(""), true);
+    if (controls.palletPlan) controls.palletPlan.innerHTML = "";
+    if (controls.palletPatterns) controls.palletPatterns.innerHTML = "";
+    return;
+  }
+
+  const result = optimizePalletStack(boxes, { pallets, maxStackHeight });
+  if (!result.best) {
+    setPalletStatus(result.errors.map((error) => `<div>${escapeXml(error)}</div>`).join(""), true);
+    if (controls.palletPlan) controls.palletPlan.innerHTML = "";
+    if (controls.palletPatterns) controls.palletPatterns.innerHTML = "";
+    return;
+  }
+
+  renderPalletResults(result);
+}
+
+function syncPalletUnitDefaults() {
+  if (!controls.maxStackHeight || !controls.palletUnit) return;
+  controls.maxStackHeight.value = formatDimension(defaultStackHeightForUnit(controls.palletUnit.value));
+}
+
+function initPalletPlanner() {
+  if (!controls.boxRows) return;
+  controls.boxRows.innerHTML = "";
+  addBoxRow();
+  syncPalletUnitDefaults();
+  setPalletStatus("No stack plan yet.", false);
 }
 
 function renderUnsupported(unsupported) {
@@ -1462,6 +1811,11 @@ function attachEvents() {
       closeScanPreview();
     }
   });
+  controls.addBoxRowBtn?.addEventListener("click", () => addBoxRow());
+  controls.loadPalletSampleBtn?.addEventListener("click", loadPalletSample);
+  controls.clearPalletBtn?.addEventListener("click", clearPalletPlanner);
+  controls.optimizePalletBtn?.addEventListener("click", handleOptimizePallet);
+  controls.palletUnit?.addEventListener("change", syncPalletUnitDefaults);
 
   controls.generateBtn.addEventListener("click", createBlueprintSvg);
   controls.explainBtn.addEventListener("click", buildBlueprintExplanation);
@@ -1501,5 +1855,6 @@ function attachEvents() {
 
 renderTemplateFields();
 wireDragDrop();
+initPalletPlanner();
 attachEvents();
 resetAll();

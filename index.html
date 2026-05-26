@@ -13,6 +13,7 @@
       <h1>Drop in a DXF. Enter dimensions. Generate professional blueprints.</h1>
     </div>
     <div class="header-actions">
+      <a href="#palletPlanner" class="btn btn-secondary">Pallet Planner</a>
       <button id="loadSampleBtn" class="btn btn-secondary" type="button">Load Sample</button>
       <label for="dxfFile" class="btn btn-primary">Upload DXF</label>
       <input type="file" id="dxfFile" accept=".dxf" hidden />
@@ -138,6 +139,72 @@
           <h3>Generated Blueprint Sheet</h3>
           <div id="blueprintPreview" class="preview-box empty">Generate blueprint to preview printable sheet.</div>
         </article>
+      </div>
+    </section>
+
+    <section id="palletPlanner" class="card pallet-card">
+      <div class="pallet-card-head">
+        <div>
+          <p class="kicker">Pallet Stack Planner</p>
+          <h2>Box Mix Optimizer</h2>
+        </div>
+        <div class="pallet-card-actions">
+          <button id="loadPalletSampleBtn" class="btn btn-secondary" type="button">Load Box Sample</button>
+          <button id="addBoxRowBtn" class="btn btn-secondary" type="button">Add Box</button>
+        </div>
+      </div>
+
+      <div class="pallet-layout">
+        <div class="pallet-input-panel">
+          <div class="form-grid pallet-settings">
+            <label>Units
+              <select id="palletUnit">
+                <option value="in">inches</option>
+                <option value="ft">feet</option>
+                <option value="mm">mm</option>
+              </select>
+            </label>
+            <label>Max Stack Height
+              <input id="maxStackHeight" type="number" min="0" step="0.001" value="60" />
+            </label>
+            <label>Custom Pallet Name
+              <input id="customPalletName" type="text" placeholder="Custom" />
+            </label>
+            <label>Custom Pallet Length
+              <input id="customPalletLength" type="number" min="0" step="0.001" />
+            </label>
+            <label>Custom Pallet Width
+              <input id="customPalletWidth" type="number" min="0" step="0.001" />
+            </label>
+          </div>
+
+          <div class="box-table-wrap">
+            <table class="box-table">
+              <thead>
+                <tr>
+                  <th>Box</th>
+                  <th>L</th>
+                  <th>W</th>
+                  <th>H</th>
+                  <th>Qty</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="boxRows"></tbody>
+            </table>
+          </div>
+
+          <div class="button-group pallet-buttons">
+            <button id="optimizePalletBtn" class="btn btn-primary" type="button">Optimize Stack</button>
+            <button id="clearPalletBtn" class="btn btn-ghost" type="button">Clear Planner</button>
+          </div>
+        </div>
+
+        <div class="pallet-result-panel">
+          <div id="palletSummary" class="message-banner" role="status" aria-live="polite">No stack plan yet.</div>
+          <div id="palletPlan" class="pallet-plan"></div>
+          <div id="palletPatterns" class="pattern-grid"></div>
+        </div>
       </div>
     </section>
   </main>
