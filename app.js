@@ -31,6 +31,9 @@ const PALLET_SAMPLE_BOXES = [
 
 const controls = {
   dxfFile: document.getElementById("dxfFile"),
+  blueprintMenu: document.getElementById("blueprintMenu"),
+  blueprintMenuToggle: document.getElementById("blueprintMenuToggle"),
+  blueprintMenuClose: document.getElementById("blueprintMenuClose"),
   dropInput: document.getElementById("dxfDropInput"),
   btnImportSketch: document.getElementById("btnImportSketch"),
   btnScanSketch: document.getElementById("btnScanSketch"),
@@ -89,7 +92,9 @@ const controls = {
   customPalletName: document.getElementById("customPalletName"),
   customPalletLength: document.getElementById("customPalletLength"),
   customPalletWidth: document.getElementById("customPalletWidth"),
+  palletAnimation: document.getElementById("palletAnimation"),
   palletSummary: document.getElementById("palletSummary"),
+  palletFiller: document.getElementById("palletFiller"),
   palletPlan: document.getElementById("palletPlan"),
   palletPatterns: document.getElementById("palletPatterns")
 };
@@ -183,6 +188,16 @@ function defaultStackHeightForUnit(unit) {
   return dimensionFromInches(60, unit);
 }
 
+function setBlueprintMenu(open) {
+  if (!controls.blueprintMenu) return;
+  controls.blueprintMenu.hidden = !open;
+  controls.blueprintMenuToggle?.setAttribute("aria-expanded", String(Boolean(open)));
+}
+
+function toggleBlueprintMenu() {
+  setBlueprintMenu(Boolean(controls.blueprintMenu?.hidden));
+}
+
 function setPalletStatus(message, isError = false) {
   if (!controls.palletSummary) return;
   controls.palletSummary.classList.toggle("error", Boolean(isError));
@@ -237,8 +252,16 @@ function clearPalletPlanner() {
   if (controls.customPalletWidth) controls.customPalletWidth.value = "";
   if (controls.palletUnit) controls.palletUnit.value = "in";
   if (controls.maxStackHeight) controls.maxStackHeight.value = formatDimension(defaultStackHeightForUnit("in"));
+  if (controls.palletAnimation) {
+    controls.palletAnimation.classList.add("empty");
+    controls.palletAnimation.innerHTML = "";
+  }
   if (controls.palletPlan) controls.palletPlan.innerHTML = "";
   if (controls.palletPatterns) controls.palletPatterns.innerHTML = "";
+  if (controls.palletFiller) {
+    controls.palletFiller.hidden = true;
+    controls.palletFiller.innerHTML = "";
+  }
   setPalletStatus("No stack plan yet.", false);
 }
 
@@ -371,6 +394,136 @@ function renderStackSvg(palletStack, maxStackHeight) {
   </svg>`;
 }
 
+function formatVolume(value, unit) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return `0 ${unit}^3`;
+  if (number >= 1000) return `${formatNumber(number / 1000, 1)}k ${unit}^3`;
+  return `${formatNumber(number, 0)} ${unit}^3`;
+}
+
+function renderAnimatedPallet(best, unit) {
+  if (!controls.palletAnimation) return;
+
+  const palletStack = best.pallets[0];
+  if (!palletStack) {
+    controls.palletAnimation.classList.add("empty");
+    controls.palletAnimation.innerHTML = "";
+    return;
+  }
+
+  const visibleLayers = palletStack.layers.slice(0, 10);
+  const maxVisualHeight = 150;
+  let bottom = 0;
+  const layers = visibleLayers.map((layer, index) => {
+    const visualHeight = Math.max(12, Math.min(34, (layer.height / best.maxStackHeight) * maxVisualHeight));
+    const fill = Math.max(0.46, Math.min(1, layer.footprintUtilization || 0.65));
+    const width = 54 + fill * 34;
+    const depth = 28 + fill * 16;
+    const html = `
+      <div class="animated-layer" style="--layer-bottom:${bottom}px; --layer-height:${visualHeight}px; --layer-width:${width}%; --layer-depth:${depth}px; --layer-color:${colorForBox(layer.boxId)}; --layer-delay:${index * 0.38}s;">
+        <span>${escapeXml(layer.boxName)}</span>
+      </div>
+    `;
+    bottom += visualHeight + 2;
+    return html;
+  }).join("");
+
+  controls.palletAnimation.classList.remove("empty");
+  controls.palletAnimation.innerHTML = `
+    <div class="pallet-animation-head">
+      <div>
+        <h3>Animated Pallet Build</h3>
+        <p>${escapeXml(best.pallet.name)} | Pallet 1 of ${best.pallets.length} | ${formatDimension(palletStack.usedHeight)} ${escapeXml(unit)} stacked</p>
+      </div>
+      <span>${visibleLayers.length}${palletStack.layers.length > visibleLayers.length ? "+" : ""} layers</span>
+    </div>
+    <div class="pallet-stage" aria-label="Animated pallet stack preview">
+      <div class="pallet-base">
+        <span></span><span></span><span></span><span></span>
+      </div>
+      <div class="pallet-runner runner-left"></div>
+      <div class="pallet-runner runner-mid"></div>
+      <div class="pallet-runner runner-right"></div>
+      <div class="animated-stack">${layers}</div>
+    </div>
+  `;
+}
+
+function getFillerRecommendations(best, unit) {
+  const palletArea = best.pallet.length * best.pallet.width;
+  const allLayers = best.pallets.flatMap((palletStack) => palletStack.layers);
+  const partialLayers = allLayers.filter((layer) => layer.count < layer.capacity);
+  const distinctBoxes = new Set(allLayers.map((layer) => layer.boxId)).size;
+  const mixedLayerHeights = new Set(allLayers.map((layer) => formatDimension(layer.height))).size;
+  const voidVolume = allLayers.reduce((total, layer) => {
+    const emptyArea = Math.max(0, palletArea * (1 - (layer.footprintUtilization || 0)));
+    return total + emptyArea * layer.height;
+  }, 0);
+  const recommendations = [];
+
+  if (partialLayers.length || best.averageFootprintUtilization < 0.82) {
+    recommendations.push({
+      title: "Void Fill",
+      material: "Air pillows, kraft paper, or bubble wrap",
+      amount: formatVolume(voidVolume, unit),
+      reason: `${partialLayers.length || "Some"} partial layer${partialLayers.length === 1 ? "" : "s"} leave open pockets around the cartons.`
+    });
+  }
+
+  if (distinctBoxes > 1 || mixedLayerHeights > 1) {
+    recommendations.push({
+      title: "Layer Separation",
+      material: "Corrugated slip sheets or thin foam sheets",
+      amount: `${allLayers.length} layer sheet${allLayers.length === 1 ? "" : "s"}`,
+      reason: "Mixed carton sizes create height transitions, so sheets help bridge gaps and keep pressure even."
+    });
+  }
+
+  if (best.maxHeightUsed >= best.maxStackHeight * 0.7 || best.pallets.length > 1) {
+    recommendations.push({
+      title: "Load Stabilizing",
+      material: "Stretch wrap plus corner boards",
+      amount: `${best.pallets.length} pallet set${best.pallets.length === 1 ? "" : "s"}`,
+      reason: "The stack is tall enough that side support will matter during movement."
+    });
+  }
+
+  if (!recommendations.length) {
+    recommendations.push({
+      title: "Light Protection",
+      material: "Stretch wrap only",
+      amount: `${best.pallets.length} pallet wrap${best.pallets.length === 1 ? "" : "s"}`,
+      reason: "The footprint is tight, with little void space to fill."
+    });
+  }
+
+  return recommendations;
+}
+
+function renderFillerRecommendations(best, unit) {
+  if (!controls.palletFiller) return;
+  const items = getFillerRecommendations(best, unit)
+    .map((item) => `
+      <article class="filler-item">
+        <div>
+          <h3>${escapeXml(item.title)}</h3>
+          <strong>${escapeXml(item.material)}</strong>
+        </div>
+        <p>${escapeXml(item.amount)}</p>
+        <span>${escapeXml(item.reason)}</span>
+      </article>
+    `).join("");
+
+  controls.palletFiller.hidden = false;
+  controls.palletFiller.innerHTML = `
+    <div class="filler-head">
+      <p class="kicker">Packing Material</p>
+      <h2>Filler Needed</h2>
+    </div>
+    <div class="filler-grid">${items}</div>
+  `;
+}
+
 function renderPalletStackCard(palletStack, maxStackHeight, unit) {
   const layerRows = palletStack.layers.map((layer, index) => `
     <li>
@@ -430,6 +583,9 @@ function renderPalletResults(result) {
     </table>
   `, false);
 
+  renderAnimatedPallet(best, unit);
+  renderFillerRecommendations(best, unit);
+
   if (controls.palletPlan) {
     controls.palletPlan.innerHTML = best.pallets
       .map((palletStack) => renderPalletStackCard(palletStack, best.maxStackHeight, unit))
@@ -451,6 +607,14 @@ function handleOptimizePallet() {
 
   if (errors.length) {
     setPalletStatus(errors.map((error) => `<div>${escapeXml(error)}</div>`).join(""), true);
+    if (controls.palletAnimation) {
+      controls.palletAnimation.classList.add("empty");
+      controls.palletAnimation.innerHTML = "";
+    }
+    if (controls.palletFiller) {
+      controls.palletFiller.hidden = true;
+      controls.palletFiller.innerHTML = "";
+    }
     if (controls.palletPlan) controls.palletPlan.innerHTML = "";
     if (controls.palletPatterns) controls.palletPatterns.innerHTML = "";
     return;
@@ -459,6 +623,14 @@ function handleOptimizePallet() {
   const result = optimizePalletStack(boxes, { pallets, maxStackHeight });
   if (!result.best) {
     setPalletStatus(result.errors.map((error) => `<div>${escapeXml(error)}</div>`).join(""), true);
+    if (controls.palletAnimation) {
+      controls.palletAnimation.classList.add("empty");
+      controls.palletAnimation.innerHTML = "";
+    }
+    if (controls.palletFiller) {
+      controls.palletFiller.hidden = true;
+      controls.palletFiller.innerHTML = "";
+    }
     if (controls.palletPlan) controls.palletPlan.innerHTML = "";
     if (controls.palletPatterns) controls.palletPatterns.innerHTML = "";
     return;
@@ -1779,6 +1951,8 @@ function syncPresetAndOrientation() {
 }
 
 function attachEvents() {
+  controls.blueprintMenuToggle?.addEventListener("click", toggleBlueprintMenu);
+  controls.blueprintMenuClose?.addEventListener("click", () => setBlueprintMenu(false));
   controls.dxfFile.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
   controls.dropInput.addEventListener("change", (event) => readFile(event.target.files && event.target.files[0]));
   controls.btnImportSketch?.addEventListener("click", () => controls.sketchUpload?.click());
@@ -1809,6 +1983,7 @@ function attachEvents() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeScanPreview();
+      setBlueprintMenu(false);
     }
   });
   controls.addBoxRowBtn?.addEventListener("click", () => addBoxRow());

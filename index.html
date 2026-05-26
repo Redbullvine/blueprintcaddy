@@ -3,29 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BlueprintCaddy.app | DXF to Blueprint</title>
+  <title>BlueprintCaddy.app | Pallet Prep</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="app-header">
     <div>
       <p class="kicker">BlueprintCaddy.app</p>
-      <h1>Drop in a DXF. Enter dimensions. Generate professional blueprints.</h1>
+      <h1>Pallet Prep for mixed box loads, with blueprint tools tucked away when you need them.</h1>
     </div>
     <div class="header-actions">
-      <a href="#palletPlanner" class="btn btn-secondary">Pallet Planner</a>
-      <button id="loadSampleBtn" class="btn btn-secondary" type="button">Load Sample</button>
-      <label for="dxfFile" class="btn btn-primary">Upload DXF</label>
-      <input type="file" id="dxfFile" accept=".dxf" hidden />
+      <a href="#palletPlanner" class="btn btn-primary">Start Pallet Prep</a>
     </div>
   </header>
 
+  <button id="blueprintMenuToggle" class="corner-menu-toggle" type="button" aria-controls="blueprintMenu" aria-expanded="false">Blueprint Menu</button>
+
   <main class="layout">
-    <section class="card controls-card">
-      <h2>Blueprint Settings</h2>
+    <section id="blueprintMenu" class="card controls-card corner-menu-panel" hidden>
+      <div class="corner-menu-head">
+        <h2>Blueprint Menu</h2>
+        <button id="blueprintMenuClose" class="modal-close" type="button" aria-label="Close blueprint menu">✕</button>
+      </div>
 
       <div class="tool-strip">
         <label for="dxfFile" class="btn btn-secondary">Upload DXF</label>
+        <input type="file" id="dxfFile" accept=".dxf" hidden />
+        <button id="loadSampleBtn" class="btn btn-secondary" type="button">Load Sample</button>
         <button id="btnImportSketch" class="btn btn-secondary toolbar-btn" type="button">📁 Import Sketch</button>
         <button id="btnScanSketch" class="btn btn-secondary toolbar-btn" type="button">📷 Scan Sketch</button>
         <button id="createTemplateBtn" class="btn btn-secondary" type="button">Create from Template</button>
@@ -125,27 +129,10 @@
       </div>
     </section>
 
-    <section class="card preview-card">
-      <div class="preview-head">
-        <h2>Drawing Previews</h2>
-        <p id="fileMeta">No DXF loaded</p>
-      </div>
-      <div class="preview-grid">
-        <article class="preview-pane">
-          <h3>Original Drawing</h3>
-          <div id="rawPreview" class="preview-box empty">Upload or load sample to see source geometry.</div>
-        </article>
-        <article class="preview-pane printable-area">
-          <h3>Generated Blueprint Sheet</h3>
-          <div id="blueprintPreview" class="preview-box empty">Generate blueprint to preview printable sheet.</div>
-        </article>
-      </div>
-    </section>
-
     <section id="palletPlanner" class="card pallet-card">
       <div class="pallet-card-head">
         <div>
-          <p class="kicker">Pallet Stack Planner</p>
+          <p class="kicker">Pallet Prep</p>
           <h2>Box Mix Optimizer</h2>
         </div>
         <div class="pallet-card-actions">
@@ -201,10 +188,29 @@
         </div>
 
         <div class="pallet-result-panel">
+          <div id="palletAnimation" class="pallet-animation empty"></div>
           <div id="palletSummary" class="message-banner" role="status" aria-live="polite">No stack plan yet.</div>
+          <div id="palletFiller" class="filler-panel" hidden></div>
           <div id="palletPlan" class="pallet-plan"></div>
           <div id="palletPatterns" class="pattern-grid"></div>
         </div>
+      </div>
+    </section>
+
+    <section class="card preview-card">
+      <div class="preview-head">
+        <h2>Drawing Previews</h2>
+        <p id="fileMeta">No DXF loaded</p>
+      </div>
+      <div class="preview-grid">
+        <article class="preview-pane">
+          <h3>Original Drawing</h3>
+          <div id="rawPreview" class="preview-box empty">Upload or load sample to see source geometry.</div>
+        </article>
+        <article class="preview-pane printable-area">
+          <h3>Generated Blueprint Sheet</h3>
+          <div id="blueprintPreview" class="preview-box empty">Generate blueprint to preview printable sheet.</div>
+        </article>
       </div>
     </section>
   </main>
