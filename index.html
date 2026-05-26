@@ -157,13 +157,17 @@
 
   <div id="scanPreviewModal" class="modal" hidden>
     <div class="modal-card modal-card-wide">
-      <h3>Preview Cleaned Scan</h3>
+      <div class="modal-header">
+        <h3>Preview Cleaned Scan</h3>
+        <button id="scanPreviewClose" class="modal-close" type="button" aria-label="Close scan preview">✕</button>
+      </div>
       <div class="scan-preview-wrap">
-        <img id="scanPreviewImage" alt="Cleaned sketch preview" />
+        <img id="scanPreviewImage" class="preview-image" alt="Cleaned sketch preview" />
       </div>
       <div class="modal-actions">
         <button id="useScanBtn" class="btn btn-primary" type="button">Use This Scan</button>
-        <button id="retakeScanBtn" class="btn btn-secondary" type="button">Retake / Cancel</button>
+        <button id="retakeScanBtn" class="btn btn-secondary" type="button">Retake</button>
+        <button id="cancelScanBtn" class="btn btn-ghost" type="button">Cancel</button>
       </div>
     </div>
   </div>

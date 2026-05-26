@@ -66,8 +66,10 @@ const controls = {
   processingStatus: document.getElementById("processingStatus"),
   scanPreviewModal: document.getElementById("scanPreviewModal"),
   scanPreviewImage: document.getElementById("scanPreviewImage"),
+  scanPreviewClose: document.getElementById("scanPreviewClose"),
   useScanBtn: document.getElementById("useScanBtn"),
-  retakeScanBtn: document.getElementById("retakeScanBtn")
+  retakeScanBtn: document.getElementById("retakeScanBtn"),
+  cancelScanBtn: document.getElementById("cancelScanBtn")
 };
 
 function setMessage(text, isError) {
@@ -1441,10 +1443,24 @@ function attachEvents() {
   });
   controls.sketchUpload?.addEventListener("change", handleSketchUpload);
   controls.sketchCameraCapture?.addEventListener("change", handleSketchCameraCapture);
+  if (controls.scanPreviewClose) {
+    controls.scanPreviewClose.onclick = closeScanPreview;
+  }
   controls.useScanBtn?.addEventListener("click", confirmUseScan);
   controls.retakeScanBtn?.addEventListener("click", () => {
     closeScanPreview();
     controls.sketchCameraCapture?.click();
+  });
+  controls.cancelScanBtn?.addEventListener("click", closeScanPreview);
+  controls.scanPreviewModal?.addEventListener("click", (event) => {
+    if (event.target && event.target.id === "scanPreviewModal") {
+      closeScanPreview();
+    }
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeScanPreview();
+    }
   });
 
   controls.generateBtn.addEventListener("click", createBlueprintSvg);
